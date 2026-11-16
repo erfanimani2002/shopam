@@ -1,0 +1,89 @@
+/* Shopam base styles — CSS-variable token system borrowed from the Delsana
+ * reference: tokens on :root, dark theme via system preference + explicit
+ * override, RTL native, Persian-first typography. */
+:root {
+    --bg: #f3f4f6;
+    --surface: #ffffff;
+    --text: #1a1c1e;
+    --muted: #6b7280;
+    --brand: #4f46e5;
+    --brand-soft: #eef2ff;
+    --danger: #dc2626;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --radius: 14px;
+    --font: 'Vazirmatn', 'Segoe UI', Tahoma, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+        --bg: #101214;
+        --surface: #1b1e22;
+        --text: #e7e9ea;
+        --muted: #9ca3af;
+        --brand: #818cf8;
+        --brand-soft: #23264d;
+    }
+}
+:root[data-theme='dark'] {
+    --bg: #101214;
+    --surface: #1b1e22;
+    --text: #e7e9ea;
+    --muted: #9ca3af;
+    --brand: #818cf8;
+    --brand-soft: #23264d;
+}
+
+* { box-sizing: border-box; }
+html { height: 100%; }
+body {
+    margin: 0;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+}
+.wrap { max-width: 430px; margin: 0 auto; padding: 28px 16px; }
+.card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    margin-bottom: 16px;
+}
+h1.brand { text-align: center; font-size: 1.4rem; margin: 0 0 14px; }
+h2 { font-size: 1.05rem; margin: 0 0 8px; }
+label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; }
+input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1rem;
+}
+input:focus { outline: 2px solid var(--brand); border-color: transparent; }
+.btn {
+    width: 100%;
+    padding: 11px;
+    border: 0;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 1rem;
+    cursor: pointer;
+    margin-top: 14px;
+}
+.btn.primary { background: var(--brand); color: #fff; }
+.btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+.error { color: var(--danger); font-size: 0.85rem; margin: 10px 0 0; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); font-size: 0.8rem; }
+.small { font-size: 0.8rem; }
+.linkrow { display: block; text-align: center; margin-top: 12px; color: var(--muted); }
+dl { margin: 8px 0 0; }
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
+dt { color: var(--muted); font-size: 0.85rem; }
+dd { margin: 0; font-size: 0.9rem; }
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.theme-btn { background: none; border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 8px; padding: 4px 10px; cursor: pointer; color: var(--text); font-family: inherit; font-size: 0.8rem; }

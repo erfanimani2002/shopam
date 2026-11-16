@@ -19,13 +19,29 @@ return [
     // Public base URL of the app, with trailing slash.
     'base_url' => 'http://shopam.test/',
 
+    // 'development' enables dev-only tooling (seed_demo.php). Missing key = 'production'.
+    'env' => 'development',
+
     // Show detailed error messages (NEVER true in production).
     'debug' => false,
 
     'session' => [
-        // Cookie name. Session cookies are HttpOnly, SameSite=Lax,
-        // and Secure automatically when the request is HTTPS.
-        'name' => 'shopam_sess',
+        // Shop users and super-admins use SEPARATE session cookies/namespaces.
+        'name'                 => 'shopam_sess',
+        'admin_name'           => 'shopam_admin_sess',
+        // Lifetime limits (checked in Auth::checkFreshness).
+        'user_idle_minutes'    => 120,
+        'user_absolute_hours'  => 720,   // 30 days
+        'admin_idle_minutes'   => 30,
+        'admin_absolute_hours' => 8,
+    ],
+
+    'auth' => [
+        'min_password_length'      => 8,
+        'max_attempts_per_account' => 5,   // failures per account (slug + identifier) ...
+        'account_lock_minutes'     => 15,  // ... within this window -> locked
+        'max_attempts_per_ip'      => 30,  // per IP (Iranian mobile users often share one IP)
+        'attempt_history_days'     => 30,  // opportunistic cleanup of old rows
     ],
 
     'uploads' => [

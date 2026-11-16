@@ -57,6 +57,7 @@ CREATE TABLE plans (
 CREATE TABLE tenants (
     id                      INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     name                    VARCHAR(100) NOT NULL,
+    slug                    VARCHAR(40)  NOT NULL,   -- shop identifier used at login: [a-z0-9-], unique, reserved words blocked
     shop_type               ENUM('clothing','cosmetics','generic') NOT NULL DEFAULT 'generic',
     field_schema            JSON         NULL,
     logo_path               VARCHAR(255) NULL,
@@ -65,7 +66,10 @@ CREATE TABLE tenants (
     subscription_expires_at DATETIME     NULL,
     created_at              TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at              TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_tenants_slug (slug),
     KEY idx_tenants_subscription (subscription_status, subscription_expires_at),
+    CONSTRAINT chk_tenants_slug_format CHECK (slug REGEXP '^[a-z0-9]([a-z0-9-]*[a-z0-9])$'),
+    CONSTRAINT chk_tenants_slug_reserved CHECK (slug NOT IN ('admin','api','www','app','static')),
     CONSTRAINT fk_tenants_plan FOREIGN KEY (plan_id) REFERENCES plans (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 

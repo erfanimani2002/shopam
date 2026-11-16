@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>شاپام — مدیر سامانه</title>
+<meta name="theme-color" content="#4f46e5">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="wrap">
+  <div class="topbar">
+    <h1 class="brand">مدیریت سامانه</h1>
+    <button class="theme-btn" id="btn-theme">حالت نمایش</button>
+  </div>
+
+  <section id="login-card" class="card">
+    <h2>ورود مدیر سامانه</h2>
+    <label for="f-email">ایمیل</label>
+    <input id="f-email" dir="ltr" autocomplete="username">
+    <label for="f-pass">رمز عبور</label>
+    <input id="f-pass" type="password" dir="ltr" autocomplete="current-password">
+    <button class="btn primary" id="btn-login">ورود</button>
+    <p class="error hidden" id="login-error"></p>
+    <a class="linkrow small" href="index.html">ورود فروشگاه‌ها</a>
+  </section>
+
+  <section id="me-card" class="card hidden">
+    <h2>اطلاعات مدیر</h2>
+    <dl id="me-list"></dl>
+    <button class="btn danger" id="btn-logout">خروج</button>
+  </section>
+</main>
+<script>
+'use strict';
+var $ = function (id) { return document.getElementById(id); };
+var esc = function (s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+};
+
+var theme = localStorage.getItem('shopam-theme');
+if (theme) document.documentElement.setAttribute('data-theme', theme);
+$('btn-theme').addEventListener('click', function () {
+  var cur = document.documentElement.getAttribute('data-theme');
+  var dark = cur ? cur === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  theme = dark ? 'light' : 'dark';
+  if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+  localStorage.setItem('shopam-theme', theme);
+});
+
+/* Admin pages always use the admin session namespace (scope=admin on csrf). */
+function api(action, opts) {
+  opts = opts || {};
+  return fetch('/api/?action=' + encodeURIComponent(action) + (action === 'csrf' ? '&scope=admin' : ''), {
+    method: opts.method || 'GET',
+    headers: opts.method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+    body: opts.method === 'POST' ? JSON.stringify(opts.body || {}) : undefined,
+    credentials: 'same-origin'
+  }).then(function (r) { return r.json(); }).catch(function () {
+    return { ok: false, error: { code: 'SERVER_ERROR', message: 'خطای ارتباط با سرور' } };
+  });
+}
+
+function showMe(d) {
+  $('login-card').classList.add('hidden');
+  $('me-card').classList.remove('hidden');
+  var a = d.admin || {};
+  var rows = [['نام', a.name], ['ایمیل', a.email]];
+  $('me-list').innerHTML = rows.map(function (r) {
+    return '<div class="row"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>';
+  }).join('');
+}
+
+$('btn-login').addEventListener('click', function () {
+  var err = $('login-error');
+  err.classList.add('hidden');
+  api('csrf').then(function (csrf) {
+    if (!csrf.ok) { err.textContent = csrf.error.message; err.classList.remove('hidden'); return; }
+    return api('admin_login', {
+      method: 'POST',
+      body: { email: $('f-email').value.trim(), password: $('f-pass').value, csrf_token: csrf.data.csrf_token }
+    }).then(function (j) {
+      if (j.ok) { showMe(j.data); }
+      else { err.textContent = j.error.message; err.classList.remove('hidden'); }
+    });
+  });
+});
+
+$('btn-logout').addEventListener('click', function () {
+  api('csrf').then(function (csrf) {
+    return api('admin_logout', { method: 'POST', body: { csrf_token: csrf.ok ? csrf.data.csrf_token : '' } });
+  }).then(function () { location.reload(); });
+});
+
+api('admin_me').then(function (j) { if (j.ok) showMe(j.data); });
+</script>
+</body>
+</html>

@@ -4,40 +4,78 @@ declare(strict_types=1);
 
 namespace App\Core;
 
+use App\Controllers\AuthController;
+use App\Controllers\SuperAdminAuthController;
+use App\Controllers\SystemController;
+use App\Middleware\RequireActiveSubscription;
+use App\Middleware\RequireAuth;
+use App\Middleware\RequireSuperAdmin;
+use App\Middleware\RequireTenant;
 use Throwable;
 
 /**
- * Minimal action router for the JSON API. Controllers are registered as
- * action => handler. Auth/CSRF middleware is added in step 2 with the
- * auth routes; the router only routes and formats errors.
+ * Declarative action router. Routes are registered as
+ *   action => [Controller::class, 'method', ['middleware', ...]]
+ * and every middleware runs (in order) before the handler.
+ *
+ * The session namespace is chosen from the middleware list BEFORE the session
+ * starts: routes containing 'admin' run in the super-admin session namespace,
+ * everything else in the shop-user namespace. Sessions therefore never mix.
  */
 final class Router
 {
-    /** @var array<string, callable> */
+    /** middleware name => [class, handle-method] */
+    private const MIDDLEWARE = [
+        'csrf'         => [Csrf::class, 'handle'],
+        'auth'         => [RequireAuth::class, 'handle'],
+        'tenant'       => [RequireTenant::class, 'handle'],
+        'admin'        => [RequireSuperAdmin::class, 'handle'],
+        'subscription' => [RequireActiveSubscription::class, 'handle'],
+    ];
+
+    /** @var array<string, array{0: class-string, 1: string, 2: list<string>}> */
     private array $routes = [];
 
-    public function add(string $action, callable $handler): void
+    /** @param list<string> $middleware */
+    public function add(string $action, array $handler, array $middleware = []): void
     {
-        $this->routes[$action] = $handler;
+        $this->routes[$action] = [$handler[0], $handler[1], $middleware];
     }
 
     public function dispatch(): void
     {
-        $action = (string) ($_GET['action'] ?? $_POST['action'] ?? '');
-        if ($action === '' || !isset($this->routes[$action])) {
-            Response::error('unknown_action', 404);
+        header('X-Content-Type-Options: nosniff');
+
+        $action = (string) (Request::input('action') ?? '');
+        $route = $this->routes[$action] ?? null;
+        if ($route === null) {
+            Response::error('UNKNOWN_ACTION', 404);
         }
+        [$class, $method, $middleware] = $route;
+
+        // Pick the session namespace before the session starts.
+        $isAdmin = in_array('admin', $middleware, true)
+            || ($action === 'csrf' && Request::input('scope') === 'admin');
+        Auth::boot($isAdmin ? Auth::SCOPE_ADMIN : Auth::SCOPE_USER);
 
         try {
-            $result = ($this->routes[$action])();
+            foreach ($middleware as $name) {
+                $mw = self::MIDDLEWARE[$name] ?? null;
+                if ($mw === null) {
+                    throw new ApiException('SERVER_ERROR', 500, "Unknown middleware: $name");
+                }
+                $mw[0]::{$mw[1]}();
+            }
+
+            $result = [$class, $method]();
             if (is_array($result)) {
                 Response::ok($result);
             }
+        } catch (ApiException $e) {
+            Response::error($e->errorCode, $e->status, $e->getMessage() ?: null);
         } catch (Throwable $e) {
             $debug = (bool) Config::get('debug', false);
-            Response::error('server_error', 500, [
-                'message' => $debug ? $e->getMessage() : null,
-            ]);
+            Response::error('SERVER_ERROR', 500, $debug ? $e->getMessage() : null);
         }
     }
 }

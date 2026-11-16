@@ -93,8 +93,8 @@ $leftover = array_map(
     $db->all("SELECT id FROM tenants WHERE name IN ('Isolation A', 'Isolation B')")
 );
 TenantPurger::purge($db, $leftover);
-$tenantA = (int) $db->insert('tenants', ['name' => 'Isolation A', 'shop_type' => 'clothing']);
-$tenantB = (int) $db->insert('tenants', ['name' => 'Isolation B', 'shop_type' => 'cosmetics']);
+$tenantA = (int) $db->insert('tenants', ['name' => 'Isolation A', 'slug' => 'isolation-a', 'shop_type' => 'clothing']);
+$tenantB = (int) $db->insert('tenants', ['name' => 'Isolation B', 'slug' => 'isolation-b', 'shop_type' => 'cosmetics']);
 $db->insert('shop_settings', ['tenant_id' => $tenantA, 'shipping_fee' => 30000]);
 $db->insert('shop_settings', ['tenant_id' => $tenantB, 'shipping_fee' => 20000]);
 

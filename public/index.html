@@ -3,11 +3,120 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>شاپام</title>
+<title>شاپام — ورود</title>
+<meta name="theme-color" content="#4f46e5">
+<link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<h1>شاپام</h1>
-<p>اسکلت پروژه آماده است. فرانت‌اند (PWA) در مراحل بعدی ساخته می‌شود.</p>
-<p><a href="api/?action=ping">API health check</a></p>
+<main class="wrap">
+  <div class="topbar">
+    <h1 class="brand">شاپام</h1>
+    <button class="theme-btn" id="btn-theme">حالت نمایش</button>
+  </div>
+
+  <section id="login-card" class="card">
+    <h2>ورود به فروشگاه</h2>
+    <label for="f-slug">شناسه فروشگاه</label>
+    <input id="f-slug" dir="ltr" autocomplete="off" placeholder="my-shop">
+    <label for="f-ident">ایمیل یا شماره موبایل</label>
+    <input id="f-ident" dir="ltr" autocomplete="username">
+    <label for="f-pass">رمز عبور</label>
+    <input id="f-pass" type="password" dir="ltr" autocomplete="current-password">
+    <button class="btn primary" id="btn-login">ورود</button>
+    <p class="error hidden" id="login-error"></p>
+    <a class="linkrow small" href="admin.html">ورود مدیر سامانه</a>
+  </section>
+
+  <section id="me-card" class="card hidden">
+    <h2>اطلاعات شما</h2>
+    <dl id="me-list"></dl>
+    <button class="btn danger" id="btn-logout">خروج</button>
+  </section>
+</main>
+<script>
+'use strict';
+var $ = function (id) { return document.getElementById(id); };
+var esc = function (s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+};
+
+/* Theme: stored choice wins, otherwise follow the system. */
+var theme = localStorage.getItem('shopam-theme');
+if (theme) document.documentElement.setAttribute('data-theme', theme);
+$('btn-theme').addEventListener('click', function () {
+  var cur = document.documentElement.getAttribute('data-theme');
+  var dark = cur ? cur === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  theme = dark ? 'light' : 'dark';
+  if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+  localStorage.setItem('shopam-theme', theme);
+});
+
+function api(action, opts) {
+  opts = opts || {};
+  return fetch('/api/?action=' + encodeURIComponent(action), {
+    method: opts.method || 'GET',
+    headers: opts.method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+    body: opts.method === 'POST' ? JSON.stringify(opts.body || {}) : undefined,
+    credentials: 'same-origin'
+  }).then(function (r) { return r.json(); }).catch(function () {
+    return { ok: false, error: { code: 'SERVER_ERROR', message: 'خطای ارتباط با سرور' } };
+  });
+}
+
+function showMe(d) {
+  $('login-card').classList.add('hidden');
+  $('me-card').classList.remove('hidden');
+  var u = d.user || {}, t = d.tenant || {};
+  var role = u.role === 'owner' ? 'مدیر فروشگاه' : 'کارمند';
+  var subMap = { active: 'فعال', expired: 'منقضی', disabled: 'غیرفعال' };
+  var sub = subMap[t.subscription_status] || t.subscription_status || '—';
+  var days = (t.days_left === null || t.days_left === undefined) ? 'نامحدود'
+    : Number(t.days_left).toLocaleString('fa-IR') + ' روز';
+  var rows = [
+    ['نام', u.name],
+    ['نقش', role],
+    ['دسترسی قیمت خرید', u.can_see_cost ? 'دارد' : 'ندارد'],
+    ['فروشگاه', t.name],
+    ['شناسه فروشگاه', t.slug],
+    ['وضعیت اشتراک', sub],
+    ['روزهای باقی‌مانده', days]
+  ];
+  $('me-list').innerHTML = rows.map(function (r) {
+    return '<div class="row"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>';
+  }).join('');
+}
+
+$('btn-login').addEventListener('click', function () {
+  var err = $('login-error');
+  err.classList.add('hidden');
+  api('csrf').then(function (csrf) {
+    if (!csrf.ok) { err.textContent = csrf.error.message; err.classList.remove('hidden'); return; }
+    return api('login', {
+      method: 'POST',
+      body: {
+        slug: $('f-slug').value.trim().toLowerCase(),
+        identifier: $('f-ident').value.trim(),
+        password: $('f-pass').value,
+        csrf_token: csrf.data.csrf_token
+      }
+    }).then(function (j) {
+      if (j.ok) { showMe(j.data); }
+      else { err.textContent = j.error.message; err.classList.remove('hidden'); }
+    });
+  });
+});
+
+$('btn-logout').addEventListener('click', function () {
+  api('csrf').then(function (csrf) {
+    return api('logout', { method: 'POST', body: { csrf_token: csrf.ok ? csrf.data.csrf_token : '' } });
+  }).then(function () { location.reload(); });
+});
+
+/* Auto-show the whoami screen when a session already exists. */
+api('me').then(function (j) { if (j.ok) showMe(j.data); });
+</script>
 </body>
 </html>
