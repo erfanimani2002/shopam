@@ -20,6 +20,7 @@ use App\Core\Auth;
 use App\Core\Bootstrap;
 use App\Core\Config;
 use App\Core\Database;
+use App\Helpers\TenantPurger;
 use App\Models\ExpenseCategoryModel;
 use App\Models\ExpenseModel;
 use App\Models\OrderModel;
@@ -73,7 +74,7 @@ try {
 $required = ['plans', 'tenants', 'users', 'super_admins', 'products', 'product_images',
     'product_variants', 'payment_methods', 'shop_settings', 'orders', 'order_items',
     'expense_categories', 'expenses', 'subscription_payments', 'audit_log', 'login_attempts'];
-$existing = array_column($db->all('SHOW TABLES'), 0);
+$existing = array_map(static fn (array $row): string => (string) array_values($row)[0], $db->all('SHOW TABLES'));
 $missing = array_diff($required, $existing);
 if ($missing !== []) {
     out('Missing tables: ' . implode(', ', $missing));
@@ -84,7 +85,14 @@ if ($missing !== []) {
 // --------------------------------------------------------------------------
 // Seed two shops (super-admin level: raw SQL with explicit tenant_id).
 // --------------------------------------------------------------------------
-$db->query("DELETE FROM tenants WHERE name IN ('Isolation A', 'Isolation B')");
+// Remove leftover rows from a previous run through the TenantPurger
+// (a direct DELETE FROM tenants can fail with FK error 1451 because the
+// composite FKs do not all cascade, e.g. order_items -> products).
+$leftover = array_map(
+    static fn (array $row): int => (int) $row['id'],
+    $db->all("SELECT id FROM tenants WHERE name IN ('Isolation A', 'Isolation B')")
+);
+TenantPurger::purge($db, $leftover);
 $tenantA = (int) $db->insert('tenants', ['name' => 'Isolation A', 'shop_type' => 'clothing']);
 $tenantB = (int) $db->insert('tenants', ['name' => 'Isolation B', 'shop_type' => 'cosmetics']);
 $db->insert('shop_settings', ['tenant_id' => $tenantA, 'shipping_fee' => 30000]);
@@ -232,12 +240,25 @@ $_SESSION['user_id'] = $ownerA;
 // --------------------------------------------------------------------------
 // Cleanup (tenant delete cascades all seeded rows).
 // --------------------------------------------------------------------------
-$db->execute('DELETE FROM tenants WHERE id IN (:a, :b)', ['a' => $tenantA, 'b' => $tenantB]);
+TenantPurger::purge($db, [$tenantA, $tenantB]);
+
+// Verify the purge left nothing behind, including tables the seed wrote
+// through the models (products, orders, order_items, expenses, users).
+// Positional "?" placeholders only — unique by construction, so no
+// placeholder-reuse issues with emulation off.
+$tenantIds = [$tenantA, $tenantB];
+$marks = implode(', ', array_fill(0, count($tenantIds), '?'));
+$allIds = [...$tenantIds, ...$tenantIds, ...$tenantIds, ...$tenantIds, ...$tenantIds];
 $left = (int) $db->value(
-    'SELECT (SELECT COUNT(*) FROM products WHERE tenant_id IN (:a,:b)) + (SELECT COUNT(*) FROM orders WHERE tenant_id IN (:a,:b))',
-    ['a' => $tenantA, 'b' => $tenantB]
+    "SELECT
+        (SELECT COUNT(*) FROM products WHERE tenant_id IN ($marks))
+      + (SELECT COUNT(*) FROM orders WHERE tenant_id IN ($marks))
+      + (SELECT COUNT(*) FROM order_items WHERE tenant_id IN ($marks))
+      + (SELECT COUNT(*) FROM expenses WHERE tenant_id IN ($marks))
+      + (SELECT COUNT(*) FROM users WHERE tenant_id IN ($marks))",
+    $allIds
 );
-check('cleanup removed all seeded rows', $left === 0);
+check('cleanup removed all seeded rows (products, orders, order_items, expenses, users)', $left === 0);
 
 // --------------------------------------------------------------------------
 // Summary (same style as the reference tests.html).

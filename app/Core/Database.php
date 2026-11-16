@@ -92,7 +92,7 @@ final class Database
     public function insert(string $table, array $data): int
     {
         $cols = $this->safeColumns($table, array_keys($data));
-        $list = implode(', ', $cols);
+        $list = implode(', ', array_map(static fn (string $c): string => "`$c`", $cols));
         $marks = implode(', ', array_map(static fn (string $c): string => ":$c", $cols));
         $this->query("INSERT INTO `$table` ($list) VALUES ($marks)", $data);
         return (int) $this->pdo->lastInsertId();
@@ -105,7 +105,7 @@ final class Database
         return $this->query("UPDATE `$table` SET $set WHERE $where", array_merge($data, $whereParams))->rowCount();
     }
 
-    /** Whitelist table/column identifiers to guard against injection via keys. */
+    /** Whitelist table/column identifiers and return the plain names. */
     private function safeColumns(string $table, array $keys): array
     {
         if (!preg_match('/^[a-z][a-z0-9_]*$/', $table)) {
@@ -116,7 +116,7 @@ final class Database
             if (!preg_match('/^[a-z][a-z0-9_]*$/', (string) $key)) {
                 throw new RuntimeException("Illegal column name: $key");
             }
-            $out[] = "`$key`";
+            $out[] = (string) $key;
         }
         return $out;
     }
