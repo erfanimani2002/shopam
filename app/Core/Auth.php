@@ -29,10 +29,14 @@ final class Auth
         if (self::$scope === $scope && session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
-        // Tests may switch scopes mid-process: close the previous session first.
+        // Tests may switch scopes mid-process: close the previous session and
+        // drop its id, so the new namespace starts a BRAND-NEW session instead
+        // of resuming the old session id (which would bleed data across
+        // namespaces). In web requests the scope never switches mid-request.
         if (session_status() === PHP_SESSION_ACTIVE) {
             session_write_close();
             $_SESSION = [];
+            session_id('');
         }
         self::$scope = $scope;
         session_name((string) Config::get(
@@ -48,6 +52,26 @@ final class Auth
             'samesite' => 'Lax',
         ]);
         session_start();
+    }
+
+    /**
+     * TEST-ONLY: fully close the current session and drop its id, so the next
+     * boot() starts a brand-new session. Used by the test harness when it
+     * switches between the tenant and super-admin session namespaces
+     * (one PHP process can only have ONE active session). Refuses to run
+     * against a non *_test database.
+     */
+    public static function resetForTests(): void
+    {
+        if (!str_ends_with((string) Config::get('db.name', ''), '_test')) {
+            throw new \RuntimeException('Auth::resetForTests is only allowed on *_test databases.');
+        }
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+        $_SESSION = [];
+        self::$scope = null;
+        session_id('');
     }
 
     public static function scope(): ?string
