@@ -1,0 +1,31 @@
+# Uploads must NEVER execute code. Only static images are served from here.
+# Uploaded files are re-encoded by GD with random names (see Helpers/Uploads.php,
+# step 3), but this file is the second line of defense.
+
+# Turn the PHP engine off for this directory tree.
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php8.c>
+    php_flag engine off
+</IfModule>
+
+# Strip handlers/types so even misnamed files are served as plain text.
+<IfModule mod_mime.c>
+    RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .phps .cgi .pl .py .sh .asp .aspx .jsp .shtml
+    RemoveType .php .phtml .phps
+    AddType text/plain .php .phtml .php3 .php4 .php5 .php7 .phps .cgi .pl .py .sh .asp .aspx .jsp .shtml
+</IfModule>
+
+# Deny access to anything script-like (and to .htaccess itself).
+<FilesMatch "\.(?i:php|phtml|php[0-9]|phps|cgi|pl|py|sh|asp|aspx|jsp|shtml|htaccess)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+Options -Indexes -ExecCGI

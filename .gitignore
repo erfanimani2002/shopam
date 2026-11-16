@@ -1,0 +1,16 @@
+# Local configuration (contains DB credentials) — never commit
+/config.php
+/tests/test_config.php
+
+# Uploaded shop files (runtime data, not source)
+/public/uploads/*
+!/public/uploads/.htaccess
+
+# IDE / OS noise
+/.idea/
+/.vscode/
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

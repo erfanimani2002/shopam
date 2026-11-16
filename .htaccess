@@ -1,0 +1,14 @@
+# Shopam root .htaccess
+# Routing: /api/* -> api/index.php (JSON API); everything else -> /public/
+# This also shields app/, cron/, tests/, schema.sql, config*.php from the web,
+# because non-API requests are rewritten into public/ where they do not exist.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Serve the API front controller for /api/...
+    RewriteRule ^api(/.*)?$ api/index.php [QSA,L]
+
+    # Everything else is served from /public
+    RewriteCond %{REQUEST_URI} !^/api/
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

@@ -1,0 +1,564 @@
+// Pure helpers for every message the notify function sends (sections 8 and 9).
+// Nothing here touches the network or Deno globals, so format.test.ts can run
+// the whole message pipeline without a database or a Telegram token.
+
+export type Order = {
+  id: string;
+  created_at: string;
+  customer: string;
+  phone: string;
+  address: string;
+  postal_code: string;
+  items: { product_id?: string; name: string; qty: number; base: number; hp: number }[];
+  shipping_method: string;
+  shipping_fee: number;
+  method: string;
+  /** how the shipping fee is paid; null on old rows = follows `method` */
+  shipping_payment_method?: string | null;
+  discount: number;
+  discount_bearer: string;
+  total: number;
+  owe: number;
+  h_share: number;
+  payout: number | null;
+  status: string;
+  tracking: string;
+  note: string;
+  snapp_part: number | null;
+  snapp_charge: number | null;
+  cash_charge: number | null;
+  snapp_fee: number | null;
+  snapp_deposit: number | null;
+  fee_in_snapp?: boolean | null; // absent = legacy row (pre-012)
+};
+
+export type OutboxRow = {
+  id: number;
+  kind: string;
+  order_id: string | null;
+  actor: string | null;
+  payload: Record<string, unknown>;
+};
+
+/* ------------------------------------------------------------------ labels */
+export const STATUS_LABEL: Record<string, string> = {
+  new: 'جدید',
+  awaiting_snapp: 'در انتظار اسنپ‌پی',
+  paid: 'پرداخت شده',
+  settled: 'تسویه شده',
+  shipped: 'ارسال شده',
+  delivered: 'تحویل شده',
+  cancelled: 'لغو شده',
+};
+
+export const BEARER_LABEL: Record<string, string> = {
+  helia: 'پیج',
+  mahdi: 'مغازه',
+  split: 'نصف‌نصف',
+};
+
+export function statusLabel(s: string): string {
+  return STATUS_LABEL[s] ?? s;
+}
+export function bearerLabel(b: string): string {
+  return BEARER_LABEL[b] ?? b;
+}
+export function shippingLabel(s: string): string {
+  return s === 'post' ? 'پست' : 'پیک';
+}
+export function methodLabel(m: string): string {
+  if (m === 'snapp') return 'اسنپ‌پی';
+  if (m === 'mixed') return 'ترکیبی (نقدی + اسنپ‌پی)';
+  return 'نقدی / کارت';
+}
+/** The shipping fee has only two channels (cash includes card). */
+export function shippingPaymentLabel(m: string | null | undefined): string {
+  return m === 'snapp' ? 'اسنپ‌پی' : 'نقدی / کارت';
+}
+/** Old rows had shipping paid through the same channel as the goods. */
+export function shippingPaymentMethod(order: Pick<Order, 'method' | 'shipping_payment_method'>): string {
+  const v = order.shipping_payment_method;
+  if (v === 'cash' || v === 'snapp') return v;
+  return order.method === 'mixed' ? 'cash' : order.method;
+}
+
+/* --------------------------------------------------------------- formatting */
+const moneyFmt = new Intl.NumberFormat('fa-IR');
+
+/** Persian digits with the Persian thousands separator: ۸۴۰٬۰۰۰ */
+export function money(value: number | null | undefined): string {
+  return moneyFmt.format(Number(value ?? 0));
+}
+
+/** Persian digits for small numbers (counts, days). */
+export function faNum(value: number | null | undefined): string {
+  return moneyFmt.format(Number(value ?? 0));
+}
+
+const dateFmt = new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  timeZone: 'Asia/Tehran',
+});
+
+const timeFmt = new Intl.DateTimeFormat('fa-IR', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+  timeZone: 'Asia/Tehran',
+});
+
+/** Jalali date in Asia/Tehran — ۱۴۰۵/۰۷/۱۷ */
+export function jalaliDate(iso: string | Date): string {
+  return dateFmt.format(toDate(iso));
+}
+
+/** Jalali date and time — ۱۴۰۵/۰۷/۱۷ — ۱۳:۰۰ */
+export function jalaliDateTime(iso: string | Date): string {
+  const d = toDate(iso);
+  return `${jalaliDate(d)} — ${timeFmt.format(d)}`;
+}
+
+/** Hours elapsed since a timestamp, rounded down. */
+export function hoursSince(iso: string | Date): number {
+  return Math.max(0, Math.floor((Date.now() - toDate(iso).getTime()) / 3600000));
+}
+
+function toDate(v: string | Date): Date {
+  return v instanceof Date ? v : new Date(v);
+}
+
+/** Escape the five characters Telegram parses as markup. */
+export function escapeHtml(s: string | null | undefined): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** `${APP_URL}/?view=orders&order=…` — never a trailing slash before `?`. */
+export function appUrl(baseUrl: string, view: 'orders' | 'products', orderId?: string | null): string {
+  const base = (baseUrl ?? '').replace(/\/+$/, '');
+  return orderId ? `${base}/?view=${view}&order=${orderId}` : `${base}/?view=${view}`;
+}
+
+export const NO_TRACKING = '⏳ هنوز ثبت نشده';
+
+/* ------------------------------------------------------- outbox group merge */
+export type Merged = {
+  rows: OutboxRow[];
+  kinds: string[];
+  has: (kind: string) => boolean;
+  actors: string[];
+  /** status_changed payload */
+  statusFrom: string | null;
+  statusTo: string | null;
+  /** tracking_changed payload */
+  trackingFrom: string | null;
+  trackingTo: string | null;
+  pinned: boolean | null;
+  pinNote: string | null;
+  productName: string | null;
+  productId: string | null;
+  available: boolean | null;
+  priceCount: number | null;
+  reminderOrderIds: string[];
+  /** admin edit: Persian field names changed (payload.changed) */
+  orderEditedChanged: string[] | null;
+  /** admin delete: payload carries everything (the row is gone) */
+  orderDeleted: { customer: string; total: number; status: string } | null;
+  /** admin product delete: payload name */
+  productDeletedName: string | null;
+  /** the channel message has to be created or edited */
+  touchesChannel: boolean;
+  /** price / availability events, caused by the shop only */
+  isProductEvent: boolean;
+};
+
+/** Section 9.2 step 2: several rows of one order become ONE message. */
+export function mergeEvents(rows: OutboxRow[]): Merged {
+  const kinds: string[] = [];
+  for (const r of rows) if (!kinds.includes(r.kind)) kinds.push(r.kind);
+  const has = (k: string) => kinds.includes(k);
+  const find = (k: string) => rows.find((r) => r.kind === k);
+
+  const st = find('status_changed')?.payload ?? {};
+  const tr = find('tracking_changed')?.payload ?? {};
+  const pin = find('pin_changed')?.payload ?? {};
+  const av = find('availability_changed')?.payload ?? {};
+  const pr = find('prices_changed')?.payload ?? {};
+  const tm = find('tracking_missing')?.payload ?? {};
+  const ed = find('order_edited')?.payload ?? {};
+  const del = find('order_deleted')?.payload ?? {};
+  const pdel = find('product_deleted')?.payload ?? {};
+
+  const statusTo = typeof st.to === 'string' ? (st.to as string) : null;
+  const cancelled = statusTo === 'cancelled';
+
+  const editedChanged = Array.isArray(ed.changed)
+    ? (ed.changed as unknown[]).filter((c): c is string => typeof c === 'string')
+    : null;
+
+  return {
+    rows,
+    kinds,
+    has,
+    actors: [...new Set(rows.map((r) => r.actor).filter((a): a is string => !!a))],
+    statusFrom: typeof st.from === 'string' ? (st.from as string) : null,
+    statusTo,
+    trackingFrom: typeof tr.from === 'string' ? (tr.from as string) : null,
+    trackingTo: typeof tr.to === 'string' ? (tr.to as string) : null,
+    pinned: typeof pin.pinned === 'boolean' ? (pin.pinned as boolean) : null,
+    pinNote: typeof pin.note === 'string' ? (pin.note as string) : null,
+    productName: typeof av.name === 'string' ? (av.name as string) : null,
+    productId: typeof av.product_id === 'string' ? (av.product_id as string) : null,
+    available: typeof av.available === 'boolean' ? (av.available as boolean) : null,
+    priceCount: typeof pr.count === 'number' ? (pr.count as number) : null,
+    reminderOrderIds: Array.isArray(tm.order_ids) ? (tm.order_ids as string[]) : [],
+    orderEditedChanged: editedChanged,
+    orderDeleted: typeof del.customer === 'string'
+      ? {
+        customer: del.customer as string,
+        total: typeof del.total === 'number' ? (del.total as number) : 0,
+        status: typeof del.status === 'string' ? (del.status as string) : '',
+      }
+      : null,
+    productDeletedName: typeof pdel.name === 'string' ? (pdel.name as string) : null,
+    // The channel post carries customer + `وضعیت:`, so an admin edit has to
+    // refresh it; a deletion edits the post from the payload (row is gone).
+    touchesChannel: has('order_created') || has('status_changed') || has('tracking_changed') || has('order_edited') || has('order_deleted') || cancelled,
+    isProductEvent: has('prices_changed') || has('availability_changed') || has('product_deleted'),
+  };
+}
+
+/* ------------------------------------------------- recipients (8.1) ------ */
+/** Minimal profile shape shared with notify/index.ts. */
+export type Profile = { user_id: string; role: 'mahdi' | 'helia' | 'admin' };
+
+/**
+ * 8.1: the actor is never notified — with ONE exception: whoever CREATES an
+ * invoice also receives that same invoice in their own Telegram, so a new
+ * invoice reaches every linked user (creator, other partner, admin).
+ * Everything else still skips the actor; events without an actor (e.g. the
+ * tracking reminder) reach everyone.
+ *
+ * Web Push keeps the old rule regardless: an actor never gets a push for
+ * their own action ("you created an order" is noise — Telegram only).
+ */
+export function dmRecipients(m: Merged, profiles: Profile[]): Profile[] {
+  if (m.has('order_created')) return profiles;
+  return pushRecipients(m, profiles);
+}
+
+/** The old 8.1 rule, unchanged: the actor is never pushed. */
+export function pushRecipients(m: Merged, profiles: Profile[]): Profile[] {
+  if (m.actors.length === 0) return profiles;
+  return profiles.filter((p) => !m.actors.includes(p.user_id));
+}
+
+/* ------------------------------------------------- channel message (9.3) */
+export type ChannelAction = 'create' | 'edit' | 'skip';
+
+/**
+ * Idempotency rule of section 9.3: the final text is hashed, and Telegram is
+ * only called when something actually changed.
+ *   no message yet           -> create
+ *   message, same hash       -> skip
+ *   message, different hash  -> edit (the caller falls back to create when
+ *                               Telegram reports the message is gone)
+ */
+export function channelAction(
+  currentMessageId: number | null,
+  currentHash: string | null,
+  nextHash: string,
+): ChannelAction {
+  if (!currentMessageId) return 'create';
+  return currentHash === nextHash ? 'skip' : 'edit';
+}
+
+export function buildChannelText(order: Order, cancelledLine = false): string {
+  const lines = [
+    `👤 مشتری: <b>${escapeHtml(order.customer)}</b>`,
+    `📅 تاریخ ثبت: ${jalaliDate(order.created_at)}`,
+    `🚚 کد رهگیری: ${order.tracking ? `<code>${escapeHtml(order.tracking)}</code>` : NO_TRACKING}`,
+    `وضعیت: ${statusLabel(order.status)}`,
+  ];
+  if (cancelledLine || order.status === 'cancelled') lines.push('❌ این سفارش لغو شد');
+  return lines.join('\n');
+}
+
+/**
+ * Channel edit for a deleted order (part B): the row is gone, so the caller
+ * passes only the payload customer. The post keeps the customer line and
+ * gains the deleted line; amounts never appear on the channel.
+ */
+export function buildDeletedChannelText(customer: string): string {
+  return `👤 مشتری: <b>${escapeHtml(customer)}</b>\n🗑 این سفارش حذف شد`;
+}
+
+/* --------------------------------------- admin event texts (part B, 8.1) */
+const ADMIN_FIELD_FA: Record<string, string> = {
+  customer: 'مشتری',
+  phone: 'تلفن',
+  address: 'آدرس',
+  postal_code: 'کد پستی',
+  note: 'یادداشت',
+  shipping_method: 'روش ارسال',
+  method: 'روش پرداخت کالا',
+  shipping_payment_method: 'پرداخت هزینه ارسال',
+  snapp_part: 'مبلغ اسنپ‌پی',
+  discount: 'تخفیف',
+  discount_bearer: 'بر عهده تخفیف',
+  tracking: 'کد رهگیری',
+  status: 'وضعیت',
+  shipping_fee: 'هزینه ارسال',
+  snapp_multiplier: 'ضریب اسنپ‌پی',
+  rounding_step: 'گرد کردن',
+  cash_part: 'مبلغ نقدی مشتری',
+  fee_in_snapp: 'کارمزد داخل اسنپ‌پی',
+  items: 'کالاها',
+  total: 'مبلغ کل',
+  payout: 'پرداختی',
+  owe: 'سهم مغازه',
+  h_share: 'سهم پیج',
+};
+
+export function adminFieldFa(key: string): string {
+  return ADMIN_FIELD_FA[key] ?? key;
+}
+
+/** «✏️ فاکتور {customer} توسط ادمین ویرایش شد» + up to 6 changed fields. */
+export function buildOrderEditedDm(customer: string, changed: string[] | null): string {
+  const head = `✏️ فاکتور ${customer} توسط ادمین ویرایش شد`;
+  const fields = (changed ?? []).slice(0, 6).map(adminFieldFa).filter((f) => !!f);
+  return fields.length ? `${head}\nتغییرات: ${fields.join('، ')}` : head;
+}
+
+/** «🗑 سفارش {customer} توسط ادمین حذف شد» (payload only, row is gone). */
+export function buildOrderDeletedDm(customer: string): string {
+  return `🗑 سفارش ${customer} توسط ادمین حذف شد`;
+}
+
+/** «🗑 محصول «{name}» حذف شد». */
+export function buildProductDeletedDm(name: string): string {
+  return `🗑 محصول «${escapeHtml(name)}» حذف شد`;
+}
+
+/* ------------------------------------------------------- invoice DM (8.3) */
+export function buildInvoice(order: Order): string {
+  const lines: string[] = [];
+  const total = Number(order.total ?? 0);
+  const shipFee = Math.max(0, Number(order.shipping_fee ?? 0));
+  const shipPay = shippingPaymentMethod(order);
+  const shipSnap = shipPay === 'snapp' ? shipFee : 0;
+  const shipCash = shipFee - shipSnap;
+  const snap = Math.max(0, Number(order.snapp_charge ?? (order.method === 'snapp' ? total : 0)));
+  const cash = Math.max(0, Number(order.cash_charge ?? (
+    order.method === 'cash' ? total : Math.max(0, total - snap)
+  )));
+  const goodsCharge = Math.max(0, total - shipFee);
+  const goodsSnap = Math.max(0, snap - shipSnap);
+  const goodsCash = Math.max(0, cash - shipCash);
+  const deposit = order.snapp_deposit !== null && order.snapp_deposit !== undefined
+    ? Number(order.snapp_deposit)
+    : order.method === 'mixed'
+      ? Math.max(0, Number(order.snapp_part ?? 0) - Number(order.snapp_fee ?? 0) + shipSnap)
+      : order.method === 'snapp'
+        ? Math.max(0, Number(order.payout ?? (total - shipFee)) - shipFee + shipSnap)
+        : shipSnap;
+
+  lines.push(`🧾 فاکتور سفارش — ${jalaliDateTime(order.created_at)}`);
+  lines.push(`👤 مشتری: ${escapeHtml(order.customer)}`);
+  lines.push(`📞 تلفن: ${escapeHtml(order.phone)}`);
+  lines.push(`📍 آدرس: ${escapeHtml(order.address)}`);
+  lines.push(`📮 کد پستی: ${escapeHtml(order.postal_code)}`);
+  lines.push('');
+  lines.push('🛍 کالاها:');
+  for (const it of order.items) {
+    lines.push(`• ${escapeHtml(it.name)} × ${faNum(it.qty)} — ${money((it.base ?? 0) + (it.hp ?? 0))} تومان`);
+  }
+  if ((order.discount ?? 0) > 0) {
+    lines.push(`🏷 تخفیف: ${money(order.discount)} (بر عهده ${bearerLabel(order.discount_bearer)})`);
+  }
+  lines.push(`🚚 ارسال: ${shippingLabel(order.shipping_method)} — ${money(shipFee)} تومان`);
+  lines.push(`💳 پرداخت کالا — ${methodLabel(order.method)}: ${money(goodsCharge)} تومان`);
+  lines.push(`🚚 پرداخت ارسال — ${shippingPaymentLabel(shipPay)}: ${money(shipFee)} تومان`);
+  if (order.method === 'mixed') {
+    if (order.fee_in_snapp) {
+      /* v5 (migration 012): the fee was collected inside the Snapp amount */
+      lines.push(`اسنپ‌پی کالا (مشتری، شامل کارمزد اسنپ‌پی ${money(order.snapp_fee ?? 0)}): ${money(goodsSnap)} تومان`);
+      lines.push(`نقدی / کارت کالا (مشتری): ${money(goodsCash)} تومان`);
+    } else {
+      /* legacy rows (pre-012): the fee was collected in the cash part */
+      lines.push(`اسنپ‌پی کالا (مشتری): ${money(goodsSnap)} تومان`);
+      lines.push(`نقدی / کارت کالا (مشتری، شامل کارمزد اسنپ‌پی ${money(order.snapp_fee ?? 0)}): ${money(goodsCash)} تومان`);
+    }
+  }
+  lines.push(`💰 مبلغ کل مشتری: ${money(total)} تومان`);
+  if (snap > 0) lines.push(`دریافتی اسنپ‌پی: ${money(snap)} تومان`);
+  if (cash > 0) lines.push(`دریافتی نقدی / کارت: ${money(cash)} تومان`);
+  if (deposit > 0) lines.push(`واریزی اسنپ‌پی (به مغازه): ${money(deposit)} تومان`);
+  lines.push('');
+  lines.push('📊 حساب‌وکتاب');
+  lines.push(`سهم مغازه: ${money(order.owe)}`);
+  lines.push(`سهم پیج: ${money(order.h_share)}`);
+  lines.push('');
+  lines.push(`📌 وضعیت: ${statusLabel(order.status)}`);
+  lines.push(`🚚 کد رهگیری: ${order.tracking ? escapeHtml(order.tracking) : NO_TRACKING}`);
+  if (order.note) lines.push(`📝 یادداشت: ${escapeHtml(order.note)}`);
+  return lines.join('\n');
+}
+
+/* ------------------------------------------------------- event DM (8.2) */
+export type DmMessage =
+  | { kind: 'invoice'; text: string }
+  | { kind: 'event'; text: string };
+
+/** Price / availability text — these groups have no order attached. */
+export function buildProductEventDm(m: Merged): string {
+  if (m.has('prices_changed')) return `قیمت ${faNum(m.priceCount ?? 0)} محصول از مغازه به‌روز شد`;
+  if (m.has('availability_changed')) {
+    return m.available
+      ? `«${escapeHtml(m.productName)}» دوباره موجود شد`
+      : `«${escapeHtml(m.productName)}» ناموجود شد`;
+  }
+  return 'به‌روزرسانی محصولات';
+}
+
+/** One merged group produces exactly one message (9.2 step 3). */
+export function buildEventDm(order: Order | null, m: Merged): DmMessage {
+  if (m.has('order_created')) {
+    if (!order) throw new Error('an order event without an order');
+    return { kind: 'invoice', text: buildInvoice(order) };
+  }
+  if (m.orderDeleted) return { kind: 'event', text: buildOrderDeletedDm(m.orderDeleted.customer) };
+  if (m.productDeletedName !== null) {
+    return { kind: 'event', text: buildProductDeletedDm(m.productDeletedName) };
+  }
+  if (m.has('order_edited')) {
+    if (!order) throw new Error('an order event without an order');
+    return { kind: 'event', text: buildOrderEditedDm(order.customer, m.orderEditedChanged) };
+  }
+  if (m.isProductEvent) return { kind: 'event', text: buildProductEventDm(m) };
+  if (!order) throw new Error('an order event without an order');
+
+  const customer = order.customer;
+  const lines: string[] = [];
+
+  if (m.statusTo === 'cancelled') {
+    lines.push(`❌ سفارش ${customer} لغو شد`);
+  } else if (m.statusTo === 'shipped') {
+    lines.push(`📦 سفارش ${customer} ارسال شد`);
+    lines.push(order.tracking ? `🚚 کد رهگیری: <code>${escapeHtml(order.tracking)}</code>` : `⏳ کد رهگیری هنوز ثبت نشده`);
+  } else if (m.statusTo === 'delivered') {
+    lines.push(`✅ سفارش ${customer} تحویل شد`);
+  } else if (m.statusTo === 'settled') {
+    lines.push(`✅ تسویه شد. سفارش ${customer} آماده ارسال است`);
+  } else if (m.statusTo === 'paid') {
+    lines.push(`💵 پول سفارش ${customer} رسید`);
+  } else if (m.has('tracking_changed')) {
+    lines.push(
+      m.trackingTo
+        ? `🚚 کد رهگیری سفارش ${customer}: <code>${escapeHtml(m.trackingTo)}</code>`
+        : `🚚 کد رهگیری سفارش ${customer} پاک شد`,
+    );
+  } else if (m.pinned !== null) {
+    lines.push(
+      m.pinned
+        ? `📌 سفارش ${customer} سنجاق شد${m.pinNote ? `: ${escapeHtml(m.pinNote)}` : ''}`
+        : `سنجاق سفارش ${customer} برداشته شد`,
+    );
+  } else {
+    lines.push(`به‌روزرسانی سفارش ${customer}`);
+  }
+
+  return { kind: 'event', text: lines.join('\n') };
+}
+
+/** Daily reminder: up to 10 customers with the days since shipping (8.2). */
+export function buildTrackingMissingDm(entries: { customer: string; days: number }[]): string {
+  const shown = entries.slice(0, 10);
+  const list = shown.map((e) => `• ${e.customer} (${faNum(e.days)} روز)`).join('\n');
+  const more = entries.length > shown.length ? `\n+ ${faNum(entries.length - shown.length)} مورد دیگر` : '';
+  return `⏳ این سفارش‌ها هنوز کد رهگیری ندارند:\n${list}${more}`;
+}
+
+/* ------------------------------------------------------------- push (8.4) */
+export type PushMessage = {
+  title: string;
+  body: string;
+  tag: string;
+  url: string;
+  orderIds: string[];
+};
+
+export function buildPush(
+  order: Order | null,
+  m: Merged,
+  baseUrl: string,
+  actorRole: 'mahdi' | 'helia' | 'admin' | null = null,
+): PushMessage {
+  const customer = order?.customer ?? '';
+  const orderId = order?.id ?? null;
+  const view: 'orders' | 'products' = m.isProductEvent ? 'products' : 'orders';
+  let title = 'دلسانا';
+  let body = '';
+
+  if (m.has('order_created')) {
+    title = actorRole === 'helia'
+      ? 'سفارش جدید از پیج'
+      : actorRole === 'admin'
+        ? 'سفارش جدید از ادمین'
+        : 'سفارش جدید از مغازه';
+    body = customer;
+  } else if (m.statusTo === 'cancelled') {
+    title = 'سفارش لغو شد';
+    body = customer;
+  } else if (m.statusTo === 'settled') {
+    title = 'آماده ارسال';
+    body = customer;
+  } else if (m.statusTo === 'shipped' || m.has('tracking_changed')) {
+    title = 'کد رهگیری ثبت شد';
+    body = customer;
+  } else if (m.statusTo === 'paid') {
+    title = 'پول سفارش رسید';
+    body = customer;
+  } else if (m.pinned !== null) {
+    title = m.pinned ? 'سفارش سنجاق شد' : 'سنجاق سفارش برداشته شد';
+    body = customer;
+  } else if (m.has('availability_changed')) {
+    title = m.available ? 'محصول موجود شد' : 'محصول ناموجود شد';
+    body = m.productName ?? '';
+  } else if (m.has('product_deleted')) {
+    title = 'محصول حذف شد';
+    body = m.productDeletedName ?? '';
+  } else if (m.has('order_edited')) {
+    title = 'فاکتور ویرایش شد';
+    body = customer;
+  } else if (m.has('order_deleted')) {
+    title = 'سفارش حذف شد';
+    body = m.orderDeleted?.customer ?? customer;
+  } else if (m.has('prices_changed')) {
+    title = 'قیمت‌ها به‌روز شد';
+    body = `${faNum(m.priceCount ?? 0)} محصول از مغازه به‌روز شد`;
+  } else {
+    title = 'به‌روزرسانی';
+    body = customer;
+  }
+
+  const tag = m.isProductEvent
+    ? m.productId
+      ? `product:${m.productId}`
+      : 'products:update'
+    : `${orderId ?? 'order'}:${m.kinds[0] ?? 'event'}`;
+
+  return {
+    title,
+    body,
+    tag,
+    url: appUrl(baseUrl, view, m.isProductEvent ? null : orderId),
+    orderIds: orderId ? [orderId] : [],
+  };
+}
