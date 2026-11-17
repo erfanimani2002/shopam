@@ -32,4 +32,24 @@ final class Config
         }
         return $value;
     }
+
+    /**
+     * TEST-ONLY override for a single key (used to redirect uploads.dir to a
+     * temp directory so tests never write into public/uploads).
+     */
+    public static function setForTests(string $key, mixed $value): void
+    {
+        if (!str_ends_with((string) (self::$data['db']['name'] ?? ''), '_test')) {
+            throw new \RuntimeException('Config::setForTests is only allowed on *_test databases.');
+        }
+        $parts = explode('.', $key);
+        $node = &self::$data;
+        foreach ($parts as $part) {
+            if (!isset($node[$part]) || !is_array($node[$part])) {
+                $node[$part] = [];
+            }
+            $node = &$node[$part];
+        }
+        $node = $value;
+    }
 }

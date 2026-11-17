@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>شاپام — تست ابزارهای جاوااسکریپت</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="wrap">
+  <h1 class="brand">تست ابزارهای جاوااسکریپت</h1>
+  <div id="results" class="card"></div>
+</main>
+<script src="js/format.js"></script>
+<script src="js/jalali.js"></script>
+<script>
+'use strict';
+var pass = 0, fail = 0;
+function check(name, ok, detail) {
+  if (ok) { pass++; }
+  else { fail++; }
+  var row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = '<dt>' + (ok ? 'PASS' : 'FAIL') + ' — ' + name +
+    (ok ? '' : ' — ' + String(detail == null ? '' : detail)) + '</dt>';
+  document.getElementById('results').appendChild(row);
+}
+function eq(a, b) { return a === b; }
+
+/* ---- Jalali round-trips on known dates (Gregorian <-> Jalali) ---- */
+check('1403/01/01 = 2024-03-20', eq(Jalali.toSqlDate('1403/01/01'), '2024-03-20'), Jalali.toSqlDate('1403/01/01'));
+check('2024-03-20 = 1403/01/01', eq(Jalali.fromSqlDate('2024-03-20'), '1403/01/01'), Jalali.fromSqlDate('2024-03-20'));
+check('1404/01/01 = 2025-03-21', eq(Jalali.toSqlDate('1404/01/01'), '2025-03-21'), Jalali.toSqlDate('1404/01/01'));
+check('1405/01/01 = 2026-03-21', eq(Jalali.toSqlDate('1405/01/01'), '2026-03-21'), Jalali.toSqlDate('1405/01/01'));
+check('1403/12/30 = 2025-03-20 (leap Esfand)', eq(Jalali.toSqlDate('1403/12/30'), '2025-03-20'), Jalali.toSqlDate('1403/12/30'));
+check('1402/12/29 = 2024-03-19 (common year end)', eq(Jalali.toSqlDate('1402/12/29'), '2024-03-19'), Jalali.toSqlDate('1402/12/29'));
+check('1403 is leap', Jalali.isLeap(1403));
+check('1399 is leap', Jalali.isLeap(1399));
+check('1404 is NOT leap', !Jalali.isLeap(1404));
+check('1403/12/30 valid', Jalali.isValid(1403, 12, 30));
+check('1404/12/30 invalid (common year)', !Jalali.isValid(1404, 12, 30));
+check('Persian digits accepted', eq(Jalali.toSqlDate('۱۴۰۳/۰۱/۰۱'), '2024-03-20'), Jalali.toSqlDate('۱۴۰۳/۰۱/۰۱'));
+check('invalid month rejected', eq(Jalali.toSqlDate('1403/13/01'), null));
+check('invalid day rejected', eq(Jalali.toSqlDate('1403/12/31'), null));
+
+/* Round-trip identity over a wide year range (incl. leap years). */
+var rtFail = null;
+[1399, 1400, 1403, 1404, 1408, 1420, 1500, 1600].forEach(function (jy) {
+  [1, 6, 7, 12].forEach(function (jm) {
+    [1, 15, 29, 30].forEach(function (jd) {
+      if (!Jalali.isValid(jy, jm, jd)) return;
+      var g = Jalali.toGregorian(jy, jm, jd);
+      var back = Jalali.toJalali(g[0], g[1], g[2]);
+      if (back[0] !== jy || back[1] !== jm || back[2] !== jd) {
+        rtFail = jy + '/' + jm + '/' + jd + ' -> ' + g.join('-') + ' -> ' + back.join('/');
+      }
+    });
+  });
+});
+check('Jalali round-trip identity over selected years', rtFail === null, rtFail);
+
+/* Gregorian round-trip too. */
+var grtFail = null;
+['2024-03-19', '2024-03-20', '2024-12-21', '2025-03-20', '2025-03-21', '2026-11-17'].forEach(function (d) {
+  var j = Jalali.fromSqlDate(d);
+  var g = Jalali.toSqlDate(j);
+  if (g !== d) grtFail = d + ' -> ' + j + ' -> ' + g;
+});
+check('Gregorian round-trip identity', grtFail === null, grtFail);
+
+/* ---- Persian digits / money formatting ---- */
+check('normalizeDigits persian', eq(Format.normalizeDigits('۱۲٬۳۴۵'), '12345'), Format.normalizeDigits('۱۲٬۳۴۵'));
+check('normalizeDigits arabic', eq(Format.normalizeDigits('١٢٣'), '123'));
+check('toPersianDigits', eq(Format.toPersianDigits('1403/05/12'), '۱۴۰۳/۰۵/۱۲'));
+check('group thousands', eq(Format.group('1234567'), '1,234,567'));
+check('money', eq(Format.money(9000000), '۹,۰۰۰,۰۰۰'), Format.money(9000000));
+check('toFloat persian decimal', eq(Format.toFloat('۹۸٫۵'), 98.5), Format.toFloat('۹۸٫۵'));
+check('toInt persian digits', eq(Format.toInt('۱۵۰'), 150));
+check('invalid money -> NaN', isNaN(Format.toInt('abc')));
+
+/* ---- summary ---- */
+var sum = document.createElement('div');
+sum.innerHTML = '<strong>' + (fail === 0 ? 'ALL PASSED' : 'FAILURES: ' + fail) +
+  ' — ' + pass + ' passed, ' + fail + ' failed</strong>';
+document.getElementById('results').appendChild(sum);
+</script>
+</body>
+</html>

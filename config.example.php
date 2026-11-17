@@ -48,8 +48,9 @@ return [
         // Real upload limit per image, enforced server-side (see Helpers/Uploads.php in step 3).
         'max_bytes'              => 3145728, // 3 MB
         'max_images_per_product' => 5,
-        // Where generated thumbnails/medium images are stored, per tenant:
-        // {dir}/{tenant_id}/{size}/xxxx.randomname
+        // Generated images are stored per tenant/product:
+        // {dir}/{tenant_id}/{product_id}/{random32}[.m|.t].webp
+        // (full ~1600px, .m medium ~1000px, .t thumb ~400px).
         'dir'                    => __DIR__ . '/public/uploads',
     ],
 

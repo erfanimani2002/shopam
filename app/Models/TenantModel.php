@@ -77,4 +77,24 @@ final class TenantModel
         }
         return max(0, (int) ceil(($ts - time()) / 86400));
     }
+
+    /**
+     * Plan limits for a tenant (max_products, max_images). Tenants without a
+     * plan fall back to the schema defaults (300 products, 5 images).
+     *
+     * @return array{max_products: int, max_images: int}
+     */
+    public function planLimits(int $tenantId): array
+    {
+        $row = $this->db->one(
+            'SELECT p.max_products, p.max_images
+             FROM tenants t LEFT JOIN plans p ON p.id = t.plan_id
+             WHERE t.id = ?',
+            [$tenantId]
+        );
+        return [
+            'max_products' => (int) ($row['max_products'] ?? 300),
+            'max_images'   => (int) ($row['max_images'] ?? 5),
+        ];
+    }
 }

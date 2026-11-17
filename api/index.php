@@ -37,6 +37,25 @@ $router->add('admin_login', [SuperAdminAuthController::class, 'login'], ['csrf']
 $router->add('admin_logout', [SuperAdminAuthController::class, 'logout'], ['admin', 'csrf']); // POST
 $router->add('admin_me', [SuperAdminAuthController::class, 'me'], ['admin']);        // GET
 
-// --- step 3+: products, orders, reports, accounts, analytics, settings, admin panel ---
+// --- step 3: products + product images (tenant-scoped; writes also check
+// subscription + CSRF; reads stay available to expired tenants) ---
+use App\Controllers\ProductController;
+use App\Controllers\ProductImageController;
+
+$products = new ProductController();
+$images = new ProductImageController();
+
+$router->add('products_list', [$products, 'products_list'], ['auth', 'tenant']);                          // GET
+$router->add('product_get', [$products, 'product_get'], ['auth', 'tenant']);                              // GET
+$router->add('product_create', [$products, 'product_create'], ['auth', 'tenant', 'subscription', 'csrf']); // POST
+$router->add('product_update', [$products, 'product_update'], ['auth', 'tenant', 'subscription', 'csrf']); // POST
+$router->add('product_archive', [$products, 'product_archive'], ['auth', 'tenant', 'subscription', 'csrf']); // POST
+$router->add('product_unarchive', [$products, 'product_unarchive'], ['auth', 'tenant', 'subscription', 'csrf']); // POST
+$router->add('products_bulk_price', [$products, 'products_bulk_price'], ['auth', 'tenant', 'subscription', 'csrf']); // POST, owner only
+
+$router->add('product_image_upload', [$images, 'product_image_upload'], ['auth', 'tenant', 'subscription', 'csrf']); // POST multipart
+$router->add('product_image_delete', [$images, 'product_image_delete'], ['auth', 'tenant', 'subscription', 'csrf']); // POST
+$router->add('product_image_set_cover', [$images, 'product_image_set_cover'], ['auth', 'tenant', 'subscription', 'csrf']); // POST
+$router->add('product_image_reorder', [$images, 'product_image_reorder'], ['auth', 'tenant', 'subscription', 'csrf']); // POST
 
 $router->dispatch();

@@ -51,10 +51,11 @@ $('btn-theme').addEventListener('click', function () {
   localStorage.setItem('shopam-theme', theme);
 });
 
-/* Admin pages always use the admin session namespace (scope=admin on csrf). */
+/* Admin pages always use the admin session namespace (scope=admin on csrf).
+ * The API path is RELATIVE (api/) so this page also works from a sub-folder. */
 function api(action, opts) {
   opts = opts || {};
-  return fetch('/api/?action=' + encodeURIComponent(action) + (action === 'csrf' ? '&scope=admin' : ''), {
+  return fetch('api/?action=' + encodeURIComponent(action) + (action === 'csrf' ? '&scope=admin' : ''), {
     method: opts.method || 'GET',
     headers: opts.method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
     body: opts.method === 'POST' ? JSON.stringify(opts.body || {}) : undefined,

@@ -131,6 +131,45 @@ if ($missing !== []) {
     exit(1);
 }
 
+// --------------------------------------------------------------------------
+// Re-runnable cleanup (crash-safe).
+//
+// ORDER MATTERS: leftover test TENANTS are purged first (leaf-first through
+// TenantPurger) and only then the platform-level rows this test seeds (the
+// test super admin, the audit rows it produced, login_attempts). This test
+// seeds no plans, so there is no FK-1451 hazard here, but the ordering rule
+// is the same as in product_test.php. Only rows matching THIS test's slugs
+// and emails are ever touched, and the *_test gate is re-checked as defense
+// in depth.
+// --------------------------------------------------------------------------
+$purgeTestData = static function (): void {
+    if (!str_ends_with((string) Config::get('db.name', ''), '_test')) {
+        return; // never run outside a *_test database
+    }
+    $db = Database::get();
+    $leftover = array_map(
+        static fn (array $row): int => (int) $row['id'],
+        $db->all("SELECT id FROM tenants WHERE slug = 'auth-t1'")
+    );
+    TenantPurger::purge($db, $leftover);
+    $db->execute(
+        'DELETE FROM audit_log WHERE action = ? AND actor_id IN (SELECT id FROM super_admins WHERE email = ?)',
+        ['admin.login', 'root-auth@test.local']
+    );
+    $db->execute('DELETE FROM super_admins WHERE email = ?', ['root-auth@test.local']);
+    truncateAttempts();
+};
+
+/** Safety-net cleanup. Swallows its own errors so it can never mask results. */
+$runCleanup = static function () use ($purgeTestData): void {
+    try {
+        $purgeTestData();
+    } catch (Throwable) {
+        // ignore: a failing safety net must not break the run
+    }
+};
+register_shutdown_function($runCleanup);
+
 try {
     // ----------------------------------------------------------------------
     // Setup: fresh state, one tenant + owner + staff (+ a product).
@@ -138,14 +177,9 @@ try {
     Request::setTestMethod('POST');
     Auth::boot(); // user scope
     $_SESSION = [];
-    truncateAttempts();
-    $db->execute('DELETE FROM super_admins WHERE email = ?', ['root-auth@test.local']);
-
-    $leftoverIds = array_map(
-        static fn (array $row): int => (int) $row['id'],
-        $db->all("SELECT id FROM tenants WHERE slug = 'auth-t1'")
-    );
-    TenantPurger::purge($db, $leftoverIds);
+    // Wipe leftovers from a previous (possibly crashed) run: tenants first,
+    // then the platform-level rows (the FK-1451-safe order, $purgeTestData).
+    $purgeTestData();
 
     $tenantId = (int) $db->insert('tenants', [
         'name' => 'Auth T1', 'slug' => 'auth-t1', 'shop_type' => 'cosmetics',
@@ -417,12 +451,9 @@ try {
         is_string($isolated) ? substr($isolated, -300) : 'no output');
 
     // ----------------------------------------------------------------------
-    // Cleanup.
+    // Cleanup (the same steps also run as a finally/shutdown safety net).
     // ----------------------------------------------------------------------
-    TenantPurger::purge($db, [$tenantId]);
-    $db->execute('DELETE FROM super_admins WHERE email = ?', ['root-auth@test.local']);
-    truncateAttempts();
-    $db->execute('DELETE FROM audit_log WHERE action = ? AND actor_id = ?', ['admin.login', $adminId]);
+    $runCleanup();
 
     $left = (int) $db->value(
         'SELECT
@@ -439,6 +470,10 @@ try {
     // the run, so the summary and exit code are always printed.
     check('UNCAUGHT exception (crash guard)', false,
         errDetail($e) . ' @ ' . $e->getFile() . ':' . $e->getLine());
+} finally {
+    // Runs after the catch on ANY exit path of the main body (exception,
+    // early return, normal end) so a crash never leaves the DB unusable.
+    $runCleanup();
 }
 
 // Recorded PHP warnings/notices each count as a failure (their output was
