@@ -81,3 +81,14 @@ and tests style from it. DO NOT copy its Supabase code, its Mahdi/Helia roles, o
 7. PWA polish, README.
 
 Ask me before making any decision that changes the money rules above.
+
+## Scope update (v1)
+- v1 ships ONLY the cosmetics/hygiene shop type. Do NOT build clothing-specific UI (size/color variant screens) now.
+- The architecture must make adding a new shop type trivial:
+    * tenants.shop_type becomes VARCHAR(30) (no ENUM); the list of valid types lives in code (app/ShopTypes/).
+    * Each type is one Preset class defining: product field schema, default categories, default expense categories, feature flags (variants, expiry_tracking...), and default payment methods.
+    * Product forms, lists and reports are rendered from the preset/field_schema. No hardcoded `shop_type === 'cosmetics'` checks outside a preset class.
+    * Keep the product_variants table and the variants code path, but the cosmetics preset has variants OFF by default (can be turned on per shop for shades/colors).
+- Cosmetics preset fields: brand, volume/weight with unit, expiry date, batch number, skin type, barcode/SKU. Add an "expiring soon" list to the dashboard.
+- Images stay in v1 for all types.
+- 

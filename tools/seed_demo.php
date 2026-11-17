@@ -6,9 +6,10 @@ declare(strict_types=1);
  * seed_demo.php — CLI only, LOCAL DEVELOPMENT ONLY.
  * Refuses to run unless config 'env' is exactly 'development'.
  *
- * Creates: a demo plan, one demo tenant (cosmetics preset, slug "demo"),
- * an owner and a staff user (staff can NOT see cost), payment methods and
- * shop settings. Passwords are random and printed ONCE to the console.
+ * Creates: a demo plan, one demo tenant (cosmetics preset, slug "demo" — the
+ * preset seeds field_schema, expense categories and payment methods), an owner
+ * and a staff user (staff can NOT see cost), and shop settings. Passwords are
+ * random and printed ONCE to the console.
  *
  * Run:  php tools/seed_demo.php
  */
@@ -17,6 +18,7 @@ use App\Core\Bootstrap;
 use App\Core\Config;
 use App\Core\Database;
 use App\Helpers\Text;
+use App\ShopTypes\ShopTypes;
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -58,32 +60,18 @@ if ($planId === 0) {
     ]);
 }
 
-// Demo tenant — cosmetics preset
-$fieldSchema = json_encode([
-    ['key' => 'brand',  'label' => 'برند',        'type' => 'text'],
-    ['key' => 'volume', 'label' => 'حجم',         'type' => 'text'],
-    ['key' => 'origin', 'label' => 'کشور سازنده', 'type' => 'text'],
-], JSON_UNESCAPED_UNICODE);
-
+// Demo tenant — cosmetics preset (field_schema, expense categories and
+// payment methods are all seeded by the preset, not hand-rolled here).
 $tenantId = $db->insert('tenants', [
     'name'                   => 'فروشگاه دمو',
     'slug'                   => Text::normalizeSlug('demo'),
     'shop_type'              => 'cosmetics',
-    'field_schema'           => $fieldSchema,
     'plan_id'                => $planId,
     'subscription_status'    => 'active',
     'subscription_expires_at' => date('Y-m-d H:i:s', time() + 30 * 86400),
 ]);
+ShopTypes::preset('cosmetics')->applyToTenant($tenantId, $db);
 $db->insert('shop_settings', ['tenant_id' => $tenantId, 'shipping_fee' => 40000, 'rounding_step' => 1000]);
-
-// Payment methods (per-shop toggles; fee math only)
-$db->insert('payment_methods', ['tenant_id' => $tenantId, 'code' => 'cash', 'label' => 'نقدی', 'enabled' => 1, 'sort_order' => 1]);
-$db->insert('payment_methods', ['tenant_id' => $tenantId, 'code' => 'card_to_card', 'label' => 'کارت به کارت', 'enabled' => 1, 'sort_order' => 2]);
-$db->insert('payment_methods', [
-    'tenant_id' => $tenantId, 'code' => 'snap_pay', 'label' => 'اسنپ پی', 'enabled' => 1,
-    'is_credit' => 1, 'fee_type' => 'multiplier', 'fee_value' => 1.15,
-    'rounding_step' => 1000, 'fee_bearer' => 'customer', 'sort_order' => 3,
-]);
 
 $ownerPassword = randomPassword();
 $staffPassword = randomPassword();

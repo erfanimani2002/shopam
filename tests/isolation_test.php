@@ -26,6 +26,7 @@ use App\Models\ExpenseModel;
 use App\Models\OrderModel;
 use App\Models\PaymentMethodModel;
 use App\Models\ProductModel;
+use App\ShopTypes\ShopTypes;
 
 $root = dirname(__DIR__);
 require $root . '/app/Core/Bootstrap.php';
@@ -90,10 +91,11 @@ if ($missing !== []) {
 // composite FKs do not all cascade, e.g. order_items -> products).
 $leftover = array_map(
     static fn (array $row): int => (int) $row['id'],
-    $db->all("SELECT id FROM tenants WHERE name IN ('Isolation A', 'Isolation B')")
+    $db->all("SELECT id FROM tenants WHERE name IN ('Isolation A', 'Isolation B', 'Isolation C')")
 );
 TenantPurger::purge($db, $leftover);
-$tenantA = (int) $db->insert('tenants', ['name' => 'Isolation A', 'slug' => 'isolation-a', 'shop_type' => 'clothing']);
+// shop_type: only 'cosmetics' is a valid v1 code (see app/ShopTypes/).
+$tenantA = (int) $db->insert('tenants', ['name' => 'Isolation A', 'slug' => 'isolation-a', 'shop_type' => 'cosmetics']);
 $tenantB = (int) $db->insert('tenants', ['name' => 'Isolation B', 'slug' => 'isolation-b', 'shop_type' => 'cosmetics']);
 $db->insert('shop_settings', ['tenant_id' => $tenantA, 'shipping_fee' => 30000]);
 $db->insert('shop_settings', ['tenant_id' => $tenantB, 'shipping_fee' => 20000]);
@@ -236,6 +238,69 @@ $_SESSION['user_id'] = $ownerB;
 check('product find(A) invisible from B', $productModel->find($prodA) === null);
 $_SESSION['tenant_id'] = $tenantA;
 $_SESSION['user_id'] = $ownerA;
+
+// --------------------------------------------------------------------------
+// 5) Shop type preset seeding: field_schema + default expense categories +
+//    default payment methods, idempotent. Runs on a THIRD tenant because
+//    tenants A/B already have manually inserted payment methods whose codes
+//    would collide with the preset's unique (tenant_id, code) rows.
+// --------------------------------------------------------------------------
+$tenantC = (int) $db->insert('tenants', ['name' => 'Isolation C', 'slug' => 'isolation-c', 'shop_type' => 'cosmetics']);
+ShopTypes::preset('cosmetics')->applyToTenant($tenantC, $db);
+
+$schema = json_decode((string) $db->value('SELECT field_schema FROM tenants WHERE id = ?', [$tenantC]), true);
+check('preset writes tenants.field_schema', is_array($schema) && count($schema) >= 5,
+    is_array($schema) ? 'fields=' . count($schema) : 'not JSON');
+
+$pmCount = (int) $db->value('SELECT COUNT(*) FROM payment_methods WHERE tenant_id = ?', [$tenantC]);
+$catCount = (int) $db->value('SELECT COUNT(*) FROM expense_categories WHERE tenant_id = ?', [$tenantC]);
+check('preset seeds default payment methods', $pmCount === 5, "count=$pmCount");
+check('preset seeds default expense categories', $catCount === 7, "count=$catCount");
+
+// Only cash + card_to_card are enabled; every credit/BNPL method is seeded
+// DISABLED with no fee, so the owner must enable it and enter a contract fee.
+$bnpl = $db->all(
+    "SELECT code, enabled, fee_type, fee_value FROM payment_methods
+     WHERE tenant_id = :t AND code IN ('snap_pay','digi_pay','torob_pay') ORDER BY code",
+    ['t' => $tenantC]
+);
+$bnplOk = count($bnpl) === 3;
+foreach ($bnpl as $m) {
+    $bnplOk = $bnplOk && (int) $m['enabled'] === 0 && $m['fee_type'] === 'none' && (float) $m['fee_value'] === 0.0;
+}
+check('preset seeds BNPL methods disabled with no fee', $bnplOk, print_r($bnpl, true));
+$basic = $db->all(
+    "SELECT code, enabled FROM payment_methods WHERE tenant_id = :t AND code IN ('cash','card_to_card')",
+    ['t' => $tenantC]
+);
+$basicOk = count($basic) === 2;
+foreach ($basic as $m) {
+    $basicOk = $basicOk && (int) $m['enabled'] === 1;
+}
+check('preset seeds cash + card_to_card enabled', $basicOk, print_r($basic, true));
+
+// Idempotent: re-applying must not duplicate anything.
+ShopTypes::preset('cosmetics')->applyToTenant($tenantC, $db);
+check('preset seeding is idempotent',
+    (int) $db->value('SELECT COUNT(*) FROM payment_methods WHERE tenant_id = ?', [$tenantC]) === $pmCount
+    && (int) $db->value('SELECT COUNT(*) FROM expense_categories WHERE tenant_id = ?', [$tenantC]) === $catCount);
+
+// Registry rejects unknown codes; unknown client input normalizes to default.
+try {
+    ShopTypes::preset('clothing');
+    check('unknown preset code rejected', false, 'no exception thrown');
+} catch (InvalidArgumentException $e) {
+    check('unknown preset code rejected', true);
+} catch (Throwable $e) {
+    check('unknown preset code rejected', false, get_class($e) . ': ' . $e->getMessage());
+}
+check('unknown code normalizes to default', ShopTypes::normalize('no-such-type') === 'cosmetics');
+
+// Preset-seeded rows must vanish with the tenant (leaf-first purge).
+TenantPurger::purge($db, [$tenantC]);
+check('preset rows purged with tenant',
+    (int) $db->value('SELECT COUNT(*) FROM payment_methods WHERE tenant_id = ?', [$tenantC]) === 0
+    && (int) $db->value('SELECT COUNT(*) FROM expense_categories WHERE tenant_id = ?', [$tenantC]) === 0);
 
 // --------------------------------------------------------------------------
 // Cleanup (tenant delete cascades all seeded rows).

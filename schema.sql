@@ -58,8 +58,10 @@ CREATE TABLE tenants (
     id                      INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     name                    VARCHAR(100) NOT NULL,
     slug                    VARCHAR(40)  NOT NULL,   -- shop identifier used at login: [a-z0-9-], unique, reserved words blocked
-    shop_type               ENUM('clothing','cosmetics','generic') NOT NULL DEFAULT 'generic',
-    field_schema            JSON         NULL,
+    -- shop_type: VARCHAR, NOT an ENUM. The list of valid types lives in code
+    -- (app/ShopTypes/); adding a type needs a preset class, not a schema change.
+    shop_type               VARCHAR(30)  NOT NULL DEFAULT 'cosmetics',
+    field_schema            JSON         NULL,       -- data-driven product fields, written by the shop type preset
     logo_path               VARCHAR(255) NULL,
     plan_id                 INT UNSIGNED NULL,
     subscription_status     ENUM('active','expired','disabled') NOT NULL DEFAULT 'active',
