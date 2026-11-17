@@ -10,7 +10,8 @@ namespace App\Core;
  *   failure: { ok: false, error: { code: ENGLISH_CODE, message: "پیام فارسی" } }
  *
  * Response::ok() strips cost/profit fields centrally (Permissions::stripSensitive)
- * whenever the session user lacks can_see_cost, so controllers cannot forget it.
+ * whenever the session user lacks can_see_cost (owners always keep them), so
+ * controllers cannot forget it.
  */
 final class Response
 {
@@ -24,9 +25,24 @@ final class Response
         exit;
     }
 
+    /**
+     * The full success payload WITHOUT sending it (unit-testable).
+     * Cost/profit stripping is gated on Permissions::can('see_cost'):
+     * owners (and staff with the owner-set flag) keep buy_price/profit,
+     * everyone else gets the stripped payload. Stripping must NEVER run
+     * unconditionally — that once hid buy_price from owners too.
+     */
+    public static function serializeOk(array $data): array
+    {
+        return [
+            'ok'   => true,
+            'data' => Permissions::can('see_cost') ? $data : Permissions::stripSensitive($data),
+        ];
+    }
+
     public static function ok(array $data = []): never
     {
-        self::json(['ok' => true, 'data' => Permissions::stripSensitive($data)]);
+        self::json(self::serializeOk($data));
     }
 
     /** English code + Persian message (central map when message is null). */

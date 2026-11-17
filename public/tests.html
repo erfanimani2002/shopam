@@ -203,6 +203,36 @@ try { odd = Products.card({ id: 11, name: 'عجیب', sell_price: null, buy_pric
   expired: false, expiring: false }); }
 catch (e) { odd = 'THREW: ' + (e && e.message); }
 check('card render: null prices/stock do not throw', odd.indexOf('THREW') === -1, odd);
+check('card render: null buy_price shows dash (no fake 0)',
+  odd.indexOf('خرید: —') !== -1 && odd.indexOf('سود واحد') === -1, odd.slice(0, 200));
+
+/* ---- buy_price end-to-end regression (the owner lost buy price bug) ---- */
+/* parseCore must carry buy_price for the owner, Persian + comma strings too. */
+var buyParsed = pc({ name: 'خرید روشن', buy_price: '۷۵۰,۰۰۰', sell_price: '۸۴۰,۰۰۰', stock: '10' }, true);
+check('parseCore: owner buy/sell persian+comma parse',
+  buyParsed.ok && buyParsed.body.buy_price === 750000 && buyParsed.body.sell_price === 840000,
+  JSON.stringify(buyParsed));
+
+/* The owner card must show the real buy price and profit = sell - buy. */
+var buyCard = '';
+try { buyCard = Products.card({ id: 20, name: 'خرید روشن', sell_price: 840000, buy_price: 750000,
+  stock: 10, low_stock_threshold: 0, is_low_stock: false, archived: 0, cover: null,
+  extra_fields: null, expired: false, expiring: false }); }
+catch (e) { buyCard = 'THREW: ' + (e && e.message); }
+check('card render: owner card shows buy price (not 0)',
+  buyCard.indexOf('THREW') === -1 && buyCard.indexOf('۷۵۰,۰۰۰') !== -1, buyCard.slice(0, 200));
+check('card render: owner card shows profit 90000 (sell - buy)',
+  buyCard.indexOf('۹۰,۰۰۰') !== -1);
+
+/* A MISSING buy_price must never render as a fake ۰ nor as profit. */
+var missingCard = '';
+try { missingCard = Products.card({ id: 21, name: 'بدون خرید', sell_price: 840000,
+  stock: 1, low_stock_threshold: 0, is_low_stock: false, archived: 0, cover: null,
+  extra_fields: null, expired: false, expiring: false }); }
+catch (e) { missingCard = 'THREW: ' + (e && e.message); }
+check('card render: missing buy_price shows dash and no profit line',
+  missingCard.indexOf('خرید: —') !== -1 && missingCard.indexOf('سود واحد') === -1
+  && missingCard.indexOf('THREW') === -1, missingCard.slice(0, 200));
 
 /* ---- summary ---- */
 var sum = document.createElement('div');

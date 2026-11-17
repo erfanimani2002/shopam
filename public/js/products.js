@@ -125,10 +125,18 @@ var Products = (function () {
     // (product threshold if > 0, else the shop default). Never recompute here.
     if (p.is_low_stock) badges += '<span class="badge low">موجودی کم</span>';
 
-    var cost = APP.canSeeCost
-      ? '<div class="cost small">خرید: ' + Format.money(p.buy_price) + ' تومان | سود واحد: '
-        + Format.money((p.sell_price || 0) - (p.buy_price || 0)) + ' تومان</div>'
-      : '';
+    // Buy price / profit lines only for users allowed to see cost. When the
+    // API omits buy_price, show "—" and NO profit line — never a fake 0.
+    var cost = '';
+    if (APP.canSeeCost) {
+      var hasCost = p.buy_price !== null && p.buy_price !== undefined;
+      var profit = hasCost && p.sell_price !== null && p.sell_price !== undefined
+        ? p.sell_price - p.buy_price
+        : null;
+      cost = '<div class="cost small">خرید: ' + Format.money(p.buy_price) + ' تومان'
+        + (profit === null ? '' : ' | سود واحد: ' + Format.money(profit) + ' تومان')
+        + '</div>';
+    }
 
     return '<div class="product-card' + (p.archived ? ' archived' : '') + '" data-id="' + p.id + '">'
       + '<label class="select"><input type="checkbox" class="pick" data-id="' + p.id + '"></label>'

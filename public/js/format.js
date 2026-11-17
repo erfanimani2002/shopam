@@ -28,8 +28,13 @@ var Format = (function () {
     return (neg ? '-' : '') + parts.join('.');
   }
 
-  /** Money for display: 9000000 -> "۹,۰۰۰,۰۰۰" (Toman). */
+  /**
+   * Money for display: 9000000 -> "۹,۰۰۰,۰۰۰" (Toman).
+   * null/undefined (a field the API intentionally omitted) renders as "—",
+   * never as a fake ۰.
+   */
   function money(n) {
+    if (n === null || n === undefined) return '—';
     var num = Number(normalizeDigits(n));
     if (!isFinite(num)) return '—';
     return toPersianDigits(group(Math.round(num)));

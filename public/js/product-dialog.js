@@ -33,7 +33,12 @@ var ProductDialog = (function () {
     html += fieldHtml('sku', 'بارکد/SKU', p ? p.sku : '', 'text', 'ltr');
 
     if (APP.canSeeCost) {
-      html += fieldHtml('buy_price', 'قیمت خرید (تومان)', p ? Format.toPersianDigits(Format.group(p.buy_price || 0)) : '', 'number');
+      // Prefill from the API value as-is; a missing buy_price (null/undefined)
+      // shows an EMPTY input, never a fake ۰ that could silently overwrite
+      // the stored value on save.
+      html += fieldHtml('buy_price', 'قیمت خرید (تومان)',
+        p && p.buy_price !== null && p.buy_price !== undefined
+          ? Format.toPersianDigits(Format.group(p.buy_price)) : '', 'number');
     }
     html += fieldHtml('sell_price', 'قیمت فروش (تومان)', p ? Format.toPersianDigits(Format.group(p.sell_price || 0)) : '', 'number');
     html += fieldHtml('stock', 'موجودی', p ? Format.toPersianDigits(p.stock) : '', 'number');

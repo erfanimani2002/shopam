@@ -22,6 +22,7 @@ use App\Core\Config;
 use App\Core\Database;
 use App\Core\Permissions;
 use App\Core\Request;
+use App\Core\Response;
 use App\Core\TenantContext;
 use App\Helpers\FieldSchema;
 use App\Helpers\Jalali;
@@ -697,6 +698,94 @@ try {
 
     // Restore the schema default so nothing else depends on our override.
     $db->execute('UPDATE shop_settings SET low_stock_threshold = 3 WHERE tenant_id = ?', [$tenantId]);
+
+    // ----------------------------------------------------------------------
+    // 10) buy_price through the WHOLE pipeline (controller + Response::ok
+    //     serialization + central stripping). Regression for the bug where
+    //     stripSensitive() removed buy_price from owners' responses too.
+    // ----------------------------------------------------------------------
+    // The plan-limit sequence in section 5 has already been tested; lift the
+    // quota so this section's creates are not blocked by it.
+    $db->execute('UPDATE plans SET max_products = 50 WHERE id = ?', [$planId]);
+
+    // OWNER: cost visibility must be granted and the payload must survive.
+    loginAs($ownerId, $tenantId, 'owner', 1);
+    check('owner: can(see_cost) is true', Permissions::can('see_cost') === true);
+
+    // Create with JSON-number inputs (the browser sends numbers).
+    Request::setTestInput([
+        'name' => 'خرید روشن', 'buy_price' => 750000, 'sell_price' => 840000, 'stock' => 10,
+    ]);
+    $created = $controller->product_create();
+    $bpId = (int) $created['product']['id'];
+    check('buy e2e: create stores buy_price in the DB',
+        (int) $db->value('SELECT buy_price FROM products WHERE id = ?', [$bpId]) === 750000,
+        var_export($db->value('SELECT buy_price FROM products WHERE id = ?', [$bpId]), true));
+    $ownerCreate = Response::serializeOk($created);
+    check('buy e2e: create response keeps buy_price for the owner',
+        (int) $ownerCreate['data']['product']['buy_price'] === 750000
+        && (int) $ownerCreate['data']['product']['sell_price'] === 840000);
+
+    // Same product, prices sent as Persian/comma STRINGS.
+    Request::setTestInput(['id' => $bpId, 'buy_price' => '۷۵۰٬۰۰۰', 'sell_price' => '۸۴۰,۰۰۰']);
+    $stringUpdate = $controller->product_update();
+    check('buy e2e: update with persian/comma strings stores exact integers',
+        (int) $db->value('SELECT buy_price FROM products WHERE id = ?', [$bpId]) === 750000
+        && (int) $db->value('SELECT sell_price FROM products WHERE id = ?', [$bpId]) === 840000);
+    check('buy e2e: update response keeps buy_price for the owner',
+        (int) Response::serializeOk($stringUpdate)['data']['product']['buy_price'] === 750000);
+
+    // product_get and products_list keep it for the owner too.
+    Request::setTestMethod('GET');
+    Request::setTestInput(['id' => $bpId]);
+    $got = Response::serializeOk($controller->product_get());
+    check('buy e2e: product_get keeps buy_price for the owner',
+        (int) $got['data']['product']['buy_price'] === 750000);
+    Request::setTestInput(['q' => 'خرید روشن']);
+    $listedOwner = Response::serializeOk($controller->products_list());
+    $bpItem = $listedOwner['data']['list']['items'][0] ?? null;
+    check('buy e2e: products_list keeps buy_price for the owner',
+        $bpItem !== null && (int) $bpItem['buy_price'] === 750000
+        && (int) $bpItem['sell_price'] === 840000);
+
+    // PARTIAL update that does NOT send buy_price must not reset it to 0.
+    Request::setTestInput(['id' => $bpId, 'name' => 'خرید روشن ۲']);
+    $renamed = $controller->product_update();
+    check('buy e2e: partial update keeps buy_price',
+        (int) $db->value('SELECT buy_price FROM products WHERE id = ?', [$bpId]) === 750000
+        && (int) Response::serializeOk($renamed)['data']['product']['buy_price'] === 750000);
+
+    // STAFF without can_see_cost: cost stripped everywhere, writing refused.
+    loginAs($staffId, $tenantId, 'staff', 0);
+    check('staff: can(see_cost) is false', Permissions::can('see_cost') === false);
+    $staffView = Response::serializeOk($controller->product_get());
+    check('buy e2e: staff response strips buy_price',
+        array_key_exists('buy_price', $staffView['data']['product']) === false);
+    Request::setTestInput(['q' => 'خرید روشن']);
+    $staffList = Response::serializeOk($controller->products_list());
+    $staffItem = $staffList['data']['list']['items'][0] ?? null;
+    check('buy e2e: staff list strips buy_price on every item',
+        $staffItem === null || array_key_exists('buy_price', $staffItem) === false);
+    Request::setTestMethod('POST');
+    Request::setTestInput(['id' => $bpId, 'buy_price' => 1]);
+    expectApi(fn () => $controller->product_update(), 'FORBIDDEN_FIELD', 'staff buy_price write refused');
+
+    // STAFF WITH can_see_cost = 1: sees and writes cost like an owner.
+    $db->execute('UPDATE users SET can_see_cost = 1 WHERE id = ?', [$staffId]);
+    loginAs($staffId, $tenantId, 'staff', 1);
+    check('staff with flag: can(see_cost) is true', Permissions::can('see_cost') === true);
+    $staffFlagView = Response::serializeOk($controller->product_get());
+    check('buy e2e: staff with flag sees buy_price',
+        (int) $staffFlagView['data']['product']['buy_price'] === 750000);
+    Request::setTestInput(['id' => $bpId, 'buy_price' => 900000]);
+    $staffWrite = $controller->product_update();
+    check('buy e2e: staff with flag can write buy_price',
+        (int) $db->value('SELECT buy_price FROM products WHERE id = ?', [$bpId]) === 900000
+        && (int) Response::serializeOk($staffWrite)['data']['product']['buy_price'] === 900000);
+
+    // Restore the seed staff flag (tidiness; cleanup purges the tenant anyway).
+    $db->execute('UPDATE users SET can_see_cost = 0 WHERE id = ?', [$staffId]);
+    loginAs($ownerId, $tenantId, 'owner', 1);
 
     // ----------------------------------------------------------------------
     // Cleanup (the same steps also run as a finally/shutdown safety net).
