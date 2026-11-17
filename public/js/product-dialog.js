@@ -91,18 +91,17 @@ var ProductDialog = (function () {
 
   function collect() {
     var schema = APP.schema || [];
-    var body = {
-      name: $('name').value.trim(),
-      category: $('category').value.trim(),
-      sku: $('sku').value.trim(),
-      sell_price: Format.toInt($('sell_price').value),
-      stock: Format.toInt($('stock').value),
-      low_stock_threshold: Format.toInt($('low_stock_threshold').value || '0')
-    };
-    if (APP.canSeeCost) body.buy_price = Format.toInt($('buy_price').value || '0');
-    if (body.sell_price === null || isNaN(body.sell_price) || body.sell_price < 0) body.sell_price = 0;
-    if (isNaN(body.stock) || body.stock < 0) body.stock = 0;
-    if (isNaN(body.low_stock_threshold) || body.low_stock_threshold < 0) body.low_stock_threshold = 0;
+    var res = ProductForm.parseCore({
+      name: $('name').value,
+      category: $('category').value,
+      sku: $('sku').value,
+      sell_price: $('sell_price').value,
+      stock: $('stock').value,
+      low_stock_threshold: $('low_stock_threshold').value,
+      buy_price: APP.canSeeCost ? $('buy_price').value : undefined
+    }, APP.canSeeCost);
+    if (!res.ok) throw res.error;   // save() shows it in the dialog
+    var body = res.body;
 
     var extra = {};
     schema.forEach(function (f) {

@@ -12,6 +12,9 @@
 </main>
 <script src="js/format.js"></script>
 <script src="js/jalali.js"></script>
+<script src="js/app.js"></script>
+<script src="js/product-form.js"></script>
+<script src="js/products.js"></script>
 <script>
 'use strict';
 var pass = 0, fail = 0;
@@ -70,12 +73,136 @@ check('Gregorian round-trip identity', grtFail === null, grtFail);
 /* ---- Persian digits / money formatting ---- */
 check('normalizeDigits persian', eq(Format.normalizeDigits('۱۲٬۳۴۵'), '12345'), Format.normalizeDigits('۱۲٬۳۴۵'));
 check('normalizeDigits arabic', eq(Format.normalizeDigits('١٢٣'), '123'));
+check('normalizeDigits ascii comma removed', eq(Format.normalizeDigits('1,234'), '1234'), Format.normalizeDigits('1,234'));
 check('toPersianDigits', eq(Format.toPersianDigits('1403/05/12'), '۱۴۰۳/۰۵/۱۲'));
 check('group thousands', eq(Format.group('1234567'), '1,234,567'));
 check('money', eq(Format.money(9000000), '۹,۰۰۰,۰۰۰'), Format.money(9000000));
 check('toFloat persian decimal', eq(Format.toFloat('۹۸٫۵'), 98.5), Format.toFloat('۹۸٫۵'));
 check('toInt persian digits', eq(Format.toInt('۱۵۰'), 150));
 check('invalid money -> NaN', isNaN(Format.toInt('abc')));
+
+/* ---- Format.group / Format.money input matrix (numbers reach these as
+ *      JSON numbers — the group() String() coercion is the regression) ---- */
+check('group: integer number', eq(Format.group(1234567), '1,234,567'), String(Format.group(1234567)));
+check('group: numeric string', eq(Format.group('98765'), '98,765'));
+check('group: negative number', eq(Format.group(-12500), '-12,500'), String(Format.group(-12500)));
+check('group: negative string', eq(Format.group('-12500'), '-12,500'));
+check('group: zero', eq(Format.group(0), '0'));
+check('group: decimal keeps fraction', eq(Format.group(1234.5), '1,234.5'), String(Format.group(1234.5)));
+check('group: null -> empty', eq(Format.group(null), ''));
+check('group: undefined -> empty', eq(Format.group(undefined), ''));
+check('group: NaN -> "NaN" without throwing', eq(Format.group(NaN), 'NaN'));
+check('group: persian-digit string passes through (ASCII \\d only)', eq(Format.group('۱۲۳۴'), '۱۲۳۴'), Format.group('۱۲۳۴'));
+check('group: persian digits grouped via money', eq(Format.money('۱۲۳۴'), '۱,۲۳۴'), Format.money('۱۲۳۴'));
+check('money: number', eq(Format.money(1234567), '۱,۲۳۴,۵۶۷'), Format.money(1234567));
+check('money: numeric string', eq(Format.money('9000000'), '۹,۰۰۰,۰۰۰'));
+check('money: persian-digit string', eq(Format.money('۱٬۲۳۴٬۵۶۷'), '۱,۲۳۴,۵۶۷'), Format.money('۱٬۲۳۴٬۵۶۷'));
+check('money: negative', eq(Format.money(-5000), '-۵,۰۰۰'), Format.money(-5000));
+check('money: zero', eq(Format.money(0), '۰'));
+check('money: null -> dash', eq(Format.money(null), '—'));
+check('money: undefined -> dash', eq(Format.money(undefined), '—'));
+check('money: NaN -> dash', eq(Format.money(NaN), '—'));
+
+/* ---- Format.toInt / Format.toFloat matrix ---- */
+check('toInt: ۱,۲۳۴,۵۶۷', eq(Format.toInt('۱,۲۳۴,۵۶۷'), 1234567), String(Format.toInt('۱,۲۳۴,۵۶۷')));
+check('toInt: 1,234,567', eq(Format.toInt('1,234,567'), 1234567), String(Format.toInt('1,234,567')));
+check('toInt: ۱٬۲۳۴٬۵۶۷', eq(Format.toInt('۱٬۲۳۴٬۵۶۷'), 1234567), String(Format.toInt('۱٬۲۳۴٬۵۶۷')));
+check('toInt: ۱۲۳۴', eq(Format.toInt('۱۲۳۴'), 1234));
+check('toInt: empty -> 0', eq(Format.toInt(''), 0), String(Format.toInt('')));
+check('toInt: spaces -> 0', eq(Format.toInt('  '), 0), String(Format.toInt('  ')));
+check('toInt: abc -> NaN', isNaN(Format.toInt('abc')));
+check('toInt: 12.5 rounds', eq(Format.toInt('12.5'), 13), String(Format.toInt('12.5')));
+check('toFloat: 12.5', eq(Format.toFloat('12.5'), 12.5), String(Format.toFloat('12.5')));
+check('toFloat: ۱۲٫۵', eq(Format.toFloat('۱۲٫۵'), 12.5), String(Format.toFloat('۱۲٫۵')));
+check('toFloat: comma thousands', eq(Format.toFloat('1,250.75'), 1250.75), String(Format.toFloat('1,250.75')));
+
+/* ---- ProductForm.parseCore regression: an invalid NON-EMPTY value is
+ *      never turned into 0; empty optional fields still mean 0. ---- */
+function pc(values, canSeeCost) { return ProductForm.parseCore(values, canSeeCost); }
+
+var ok1 = pc({ name: 'کرم', sell_price: '۱,۲۳۴,۵۶۷', stock: '12', low_stock_threshold: '3', buy_price: '1,250,000' }, true);
+check('parseCore: persian+comma price parses', ok1.ok && ok1.body.sell_price === 1234567
+  && ok1.body.stock === 12 && ok1.body.low_stock_threshold === 3 && ok1.body.buy_price === 1250000,
+  JSON.stringify(ok1));
+check('parseCore: trims name', ok1.body.name === 'کرم');
+
+var ok2 = pc({ name: '', sell_price: '', stock: '', low_stock_threshold: '' }, true);
+check('parseCore: empty optional fields mean 0', ok2.ok && ok2.body.sell_price === 0
+  && ok2.body.stock === 0 && ok2.body.low_stock_threshold === 0, JSON.stringify(ok2));
+
+var ok3 = pc({ sell_price: '  ', stock: '  ' }, true);
+check('parseCore: whitespace-only fields mean 0', ok3.ok && ok3.body.sell_price === 0 && ok3.body.stock === 0);
+
+var badSell = pc({ name: 'x', sell_price: '12abc' }, true);
+check('parseCore: garbage sell_price raises error', !badSell.ok && badSell.error === 'قیمت فروش نامعتبر است.', JSON.stringify(badSell));
+check('parseCore: garbage sell_price is NOT 0', !badSell.ok || badSell.body.sell_price !== 0);
+
+var badBuy = pc({ name: 'x', sell_price: '100', buy_price: '12abc' }, true);
+check('parseCore: garbage buy_price raises error (owner)', !badBuy.ok && badBuy.error === 'قیمت خرید نامعتبر است.', JSON.stringify(badBuy));
+var badStock = pc({ name: 'x', sell_price: '100', stock: '۵.۵' }, true);
+check('parseCore: decimal stock raises error', !badStock.ok && badStock.error === 'موجودی نامعتبر است.', JSON.stringify(badStock));
+var badThr = pc({ name: 'x', sell_price: '100', low_stock_threshold: 'x' }, true);
+check('parseCore: garbage threshold raises error', !badThr.ok && badThr.error === 'حد هشدار موجودی نامعتبر است.', JSON.stringify(badThr));
+var neg = pc({ name: 'x', sell_price: '-5' }, true);
+check('parseCore: negative price raises error', !neg.ok && neg.error === 'قیمت فروش نامعتبر است.', JSON.stringify(neg));
+
+var staff = pc({ name: 'x', sell_price: '۱۰۰', stock: '2', buy_price: 'GARBAGE' }, false);
+check('parseCore: staff cannot set buy_price at all', staff.ok && staff.body.buy_price === undefined, JSON.stringify(staff));
+
+/* ---- Rendering regression: Products.card must not throw on realistic
+ *      API payloads (numbers arrive as JSON numbers). ---- */
+APP.schema = [{ key: 'brand', label: 'برند', type: 'text', in_list: true }];
+APP.canSeeCost = true;
+
+var payloads = [
+  { title: 'owner + cover + expiring',
+    p: { id: 7, name: 'کرم لا روشه', sell_price: 1250000, buy_price: 900000, stock: 12,
+         low_stock_threshold: 0, is_low_stock: false, archived: 0,
+         cover: { path: 'uploads/1/7/x.webp', medium_path: 'uploads/1/7/x.m.webp' },
+         extra_fields: { brand: 'لور' }, expired: false, expiring: true } },
+  { title: 'no images + null extra_fields',
+    p: { id: 8, name: 'شامپو', sell_price: 80000, buy_price: 50000, stock: 0,
+         low_stock_threshold: 0, is_low_stock: true, archived: 0, cover: null,
+         extra_fields: null, expired: false, expiring: false } },
+  { title: 'expired badge',
+    p: { id: 9, name: 'قرص', sell_price: 150000, buy_price: 100000, stock: 3,
+         low_stock_threshold: 0, is_low_stock: false, archived: 0, cover: null,
+         extra_fields: {}, expired: true, expiring: false } },
+  { title: 'archived',
+    p: { id: 10, name: 'قدیمی', sell_price: 1000, buy_price: 500, stock: 9,
+         low_stock_threshold: 0, is_low_stock: false, archived: 1, cover: null,
+         extra_fields: {}, expired: false, expiring: false } }
+];
+
+var renderError = null;
+var htmls = [];
+payloads.forEach(function (item) {
+  try { htmls.push(Products.card(item.p)); }
+  catch (e) { renderError = item.title + ': ' + (e && e.message); htmls.push(''); }
+});
+check('card render: no exception on 4 payloads', renderError === null, renderError);
+check('card render: money shown as persian group', htmls[0].indexOf('۱,۲۳۴,۵۶۷') !== -1, htmls[0].slice(0, 120));
+check('card render: cover img rendered', htmls[0].indexOf('uploads/1/7/x.webp') !== -1);
+check('card render: placeholder when no cover', htmls[1].indexOf('cover placeholder') !== -1);
+check('card render: owner sees cost', htmls[0].indexOf('خرید:') !== -1 && htmls[0].indexOf('۳۵۰,۰۰۰') !== -1, htmls[0].slice(0, 200));
+check('card render: low badge from is_low_stock only', htmls[1].indexOf('موجودی کم') !== -1 && htmls[0].indexOf('موجودی کم') === -1);
+
+APP.canSeeCost = false;
+var staffHtml = '';
+try { staffHtml = Products.card(payloads[0].p); }
+catch (e) { renderError = 'staff: ' + (e && e.message); }
+check('card render: staff view no exception', renderError === null, renderError);
+check('card render: staff sees no cost', staffHtml.indexOf('خرید:') === -1, staffHtml.slice(0, 160));
+check('card render: staff sees price', staffHtml.indexOf('۱,۲۳۴,۵۶۷') !== -1);
+APP.canSeeCost = true;
+
+/* A payload with hostile/odd values (null prices, string numbers, missing keys). */
+var odd = '';
+try { odd = Products.card({ id: 11, name: 'عجیب', sell_price: null, buy_price: null, stock: null,
+  low_stock_threshold: null, is_low_stock: null, archived: 0, cover: null, extra_fields: null,
+  expired: false, expiring: false }); }
+catch (e) { odd = 'THREW: ' + (e && e.message); }
+check('card render: null prices/stock do not throw', odd.indexOf('THREW') === -1, odd);
 
 /* ---- summary ---- */
 var sum = document.createElement('div');

@@ -51,16 +51,35 @@ var Products = (function () {
     if (state.low_stock) query.low_stock = 1;
     if (state.expiring) query.expiring_soon = 1;
     APP.get('products_list', query).then(function (j) {
-      if (!j.ok) {
-        if (j.error.code === 'SESSION_EXPIRED') { location.reload(); return; }
-        el.grid.innerHTML = '';
-        APP.toast(j.error.message || 'خطا در بارگذاری', false);
-        return;
+      try {
+        if (!j.ok) {
+          if (j.error && j.error.code === 'SESSION_EXPIRED') { location.reload(); return; }
+          items = [];
+          el.grid.innerHTML = '<div class="muted empty">' +
+            APP.esc((j.error && j.error.message) || 'خطا در بارگذاری') + '</div>';
+          el.pager.innerHTML = '';
+          return;
+        }
+        APP.schema = j.data.schema || APP.schema;
+        items = j.data.list.items || [];
+        window._lastProducts = items; // used by the bulk-price preview
+        render(j.data.list);
+      } catch (e) {
+        console.error('products render failed', e);
+        items = [];
+        el.grid.innerHTML = '<div class="muted empty">خطا در نمایش محصولات</div>';
+        APP.toast('خطا در نمایش محصولات', false);
+      } finally {
+        // The loading placeholder must never survive: every path above
+        // replaces the grid, this removes it even if one is added twice.
+        var loading = el.grid.querySelector('.loading');
+        if (loading) loading.remove();
       }
-      APP.schema = j.data.schema || APP.schema;
-      items = j.data.list.items;
-      window._lastProducts = items; // used by the bulk-price preview
-      render(j.data.list);
+    }, function (e) {
+      // Rejection path (network-level failures are normally already mapped
+      // to {ok:false} by APP.call, but never leave the loading state).
+      console.error('products load failed', e);
+      el.grid.innerHTML = '<div class="muted empty">خطا در بارگذاری محصولات</div>';
     });
   }
 
@@ -73,7 +92,16 @@ var Products = (function () {
       return;
     }
     el.count.textContent = 'مجموع: ' + Format.toPersianDigits(list.total) + ' محصول';
-    el.grid.innerHTML = items.map(card).join('');
+    // One broken product must never block the whole grid.
+    el.grid.innerHTML = items.map(function (p) {
+      try {
+        return card(p);
+      } catch (e) {
+        console.error('product card render failed (id=' + (p && p.id) + ')', e);
+        return '<div class="product-card broken"><div class="body">'
+          + '<div class="name muted">نمایش این محصول ممکن نیست</div></div></div>';
+      }
+    }).join('');
     wireCards();
     renderPager(list);
     var bulk = $('btn-bulk-price');
@@ -93,7 +121,9 @@ var Products = (function () {
     var badges = '';
     if (p.expired) badges += '<span class="badge expired">منقضی شده</span>';
     else if (p.expiring) badges += '<span class="badge expiring">نزدیک انقضا</span>';
-    if (p.stock <= (p.low_stock_threshold || 0) && p.stock >= 0 && (p.low_stock_threshold > 0)) badges += '<span class="badge low">موجودی کم</span>';
+    // THE single source of truth: the server-computed is_low_stock flag
+    // (product threshold if > 0, else the shop default). Never recompute here.
+    if (p.is_low_stock) badges += '<span class="badge low">موجودی کم</span>';
 
     var cost = APP.canSeeCost
       ? '<div class="cost small">خرید: ' + Format.money(p.buy_price) + ' تومان | سود واحد: '
@@ -158,5 +188,5 @@ var Products = (function () {
 
   function reload() { load(); }
 
-  return { init: init, reload: reload, state: state };
+  return { init: init, reload: reload, state: state, card: card };
 })();

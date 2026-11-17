@@ -5,10 +5,12 @@ var Format = (function () {
   var PERSIAN = '۰۱۲۳۴۵۶۷۸۹';
   var MAP = { '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
     '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
-    '٬': '', '،': '', '٫': '.', ' ': '', '-': '-' };
+    '٬': '', '،': '', '٫': '.', ' ': '', '-': '-', ',': '' };
 
   function normalizeDigits(s) {
-    return String(s == null ? '' : s).replace(/[۰-۹٠-٩٬،٫ ]/g, function (c) {
+    // ASCII ',' (thousands separator) is removed too, so "۱,۲۳۴,۵۶۷" and
+    // "1,234,567" both parse. '٫' (Persian decimal mark) becomes '.'.
+    return String(s == null ? '' : s).replace(/[۰-۹٠-٩٬،٫, ]/g, function (c) {
       return MAP[c] !== undefined ? MAP[c] : c;
     });
   }
@@ -19,8 +21,9 @@ var Format = (function () {
 
   /** Thousands separators: 1234567 -> "1,234,567" (then persian digits). */
   function group(s) {
+    s = String(s == null ? '' : s);
     var neg = s.charAt(0) === '-';
-    var parts = String(s).replace(/^-/, '').split('.');
+    var parts = s.replace(/^-/, '').split('.');
     parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     return (neg ? '-' : '') + parts.join('.');
   }

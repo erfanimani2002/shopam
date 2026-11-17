@@ -74,12 +74,13 @@ final class ProductModel extends BaseModel
         }
 
         if (!empty($args['low_stock'])) {
-            // low_stock_threshold = 0 means "use the shop setting". The
-            // subquery is correlated (no placeholder, so :tenant_id in the
-            // main WHERE is not duplicated).
+            // THE single low-stock rule (same as isLowStock() below): the
+            // product-level threshold wins when > 0, otherwise the shop
+            // default (fetched once in PHP — one source of truth, and the
+            // placeholder :low_default is unique in this statement).
             $where[] = 'stock <= CASE WHEN low_stock_threshold > 0 THEN low_stock_threshold
-                ELSE COALESCE((SELECT s.low_stock_threshold FROM shop_settings s
-                    WHERE s.tenant_id = products.tenant_id), 3) END';
+                ELSE :low_default END';
+            $params['low_default'] = $this->shopLowStockDefault();
         }
 
         if (!empty($args['expiring'])) {
@@ -132,11 +133,17 @@ final class ProductModel extends BaseModel
             $rows
         ));
         $days = max(1, min(365, (int) ($args['days'] ?? 30)));
+        $shopDefault = $this->shopLowStockDefault();
         foreach ($rows as $row) {
             $row['extra_fields'] = self::decodeExtra($row['extra_fields']);
             $row['images'] = $imagesMap[$row['id']] ?? [];
             $row['cover'] = $row['images'][0] ?? null;
             $row += self::expiryFlags($row['extra_fields'], $days);
+            $row['is_low_stock'] = self::isLowStock(
+                (int) $row['stock'],
+                (int) $row['low_stock_threshold'],
+                $shopDefault
+            );
             $items[] = $row;
         }
 
@@ -160,7 +167,42 @@ final class ProductModel extends BaseModel
         $row['images'] = (new ProductImageModel())->listForProduct($id);
         $row['cover'] = $row['images'][0] ?? null;
         $row += self::expiryFlags($row['extra_fields'], 30);
+        $row['is_low_stock'] = self::isLowStock(
+            (int) $row['stock'],
+            (int) $row['low_stock_threshold'],
+            $this->shopLowStockDefault()
+        );
         return $row;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Low stock — THE single rule, used by the SQL filter, the API flag   */
+    /* and every consumer (cards, summaries). The frontend NEVER           */
+    /* recomputes it.                                                      */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * The session tenant's shop-level default threshold (schema default 3
+     * when the settings row is missing).
+     */
+    public function shopLowStockDefault(): int
+    {
+        return (int) ($this->db->value(
+            'SELECT low_stock_threshold FROM shop_settings WHERE tenant_id = ?',
+            [Auth::tenantId()]
+        ) ?? 3);
+    }
+
+    /** Product threshold wins when > 0, otherwise the shop default. */
+    public static function effectiveLowStock(int $productThreshold, int $shopDefault): int
+    {
+        return $productThreshold > 0 ? $productThreshold : $shopDefault;
+    }
+
+    /** ONE comparison used everywhere: stock at/below the effective threshold. */
+    public static function isLowStock(int $stock, int $productThreshold, int $shopDefault): bool
+    {
+        return $stock >= 0 && $stock <= self::effectiveLowStock($productThreshold, $shopDefault);
     }
 
     /** Number of non-archived products (used for the plan limit). */

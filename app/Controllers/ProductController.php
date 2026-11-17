@@ -20,6 +20,14 @@ use App\Models\TenantModel;
  */
 final class ProductController
 {
+    /** Persian validation label per integer field (shared with Text::toInt). */
+    private const INT_LABELS = [
+        'buy_price'           => 'قیمت خرید',
+        'sell_price'          => 'قیمت فروش',
+        'stock'               => 'موجودی',
+        'low_stock_threshold' => 'حد هشدار موجودی',
+    ];
+
     private ProductModel $products;
 
     public function __construct()
@@ -142,7 +150,11 @@ final class ProductController
         if (!in_array($mode, ['percent', 'fixed'], true)) {
             throw new ApiException('INVALID_INPUT', 400, 'حالت تغییر قیمت باید درصد یا مقدار ثابت باشد.');
         }
-        $raw = Text::normalizeDigits((string) Request::input('value', ''));
+        // Bulk value may be negative (a discount) and may be a percent, so
+        // it is a SIGNED float — normalize digits/separators, then validate.
+        // The thousands separators (ASCII ',' and '٬') are stripped by the
+        // extended digit map.
+        $raw = str_replace(' ', '', Text::normalizeDigits(trim((string) Request::input('value', ''))));
         if ($raw === '' || !is_numeric($raw)) {
             throw new ApiException('INVALID_INPUT', 400, 'مقدار تغییر قیمت نامعتبر است.');
         }
@@ -244,39 +256,27 @@ final class ProductController
             if ($input === null) {
                 continue; // create: buy_price defaults 0 via schema
             }
-            $raw = Text::normalizeDigits(trim((string) $input));
-            if (!is_numeric($raw)) {
-                throw new ApiException('INVALID_INPUT', 400, 'قیمت باید عدد باشد.');
-            }
-            $value = (int) $raw;
-            if ($value < 0) {
-                throw new ApiException('INVALID_INPUT', 400, 'قیمت نمی‌تواند منفی باشد.');
+            $value = Text::toInt((string) $input);
+            if ($value === null) {
+                throw new ApiException('INVALID_INPUT', 400, self::INT_LABELS[$key] . ' نامعتبر است.');
             }
             $columns[$key] = $value;
         }
 
         $stock = Request::input('stock');
         if ($stock !== null) {
-            $raw = Text::normalizeDigits(trim((string) $stock));
-            if (!is_numeric($raw)) {
-                throw new ApiException('INVALID_INPUT', 400, 'موجودی باید عدد باشد.');
-            }
-            $value = (int) $raw;
-            if ($value < 0) {
-                throw new ApiException('INVALID_INPUT', 400, 'موجودی نمی‌تواند منفی باشد.');
+            $value = Text::toInt((string) $stock);
+            if ($value === null) {
+                throw new ApiException('INVALID_INPUT', 400, self::INT_LABELS['stock'] . ' نامعتبر است.');
             }
             $columns['stock'] = $value;
         }
 
         $threshold = Request::input('low_stock_threshold');
         if ($threshold !== null) {
-            $raw = Text::normalizeDigits(trim((string) $threshold));
-            if (!is_numeric($raw)) {
-                throw new ApiException('INVALID_INPUT', 400, 'حد هشدار موجودی باید عدد باشد.');
-            }
-            $value = (int) $raw;
-            if ($value < 0) {
-                throw new ApiException('INVALID_INPUT', 400, 'حد هشدار موجودی نمی‌تواند منفی باشد.');
+            $value = Text::toInt((string) $threshold);
+            if ($value === null) {
+                throw new ApiException('INVALID_INPUT', 400, self::INT_LABELS['low_stock_threshold'] . ' نامعتبر است.');
             }
             $columns['low_stock_threshold'] = $value;
         }

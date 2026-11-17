@@ -25,6 +25,7 @@ use App\Core\Request;
 use App\Core\TenantContext;
 use App\Helpers\FieldSchema;
 use App\Helpers\Jalali;
+use App\Helpers\Text;
 use App\Helpers\TenantPurger;
 use App\Helpers\Uploads;
 use App\Middleware\RequireActiveSubscription;
@@ -608,6 +609,94 @@ try {
     check('products_list: schema returned for the dialog', is_array($listed['schema'] ?? null) && count($listed['schema']) >= 5);
     check('products_list: images embedded on item', is_array($first['images'] ?? null));
     Request::setTestMethod('POST');
+
+    // ----------------------------------------------------------------------
+    // 9) Numeric input hardening (Text::toInt) + the is_low_stock flag.
+    // ----------------------------------------------------------------------
+    // The shared strict parser itself.
+    check('Text::toInt: ۱٬۲۳۴٬۵۶۷', Text::toInt('۱٬۲۳۴٬۵۶۷') === 1234567, var_export(Text::toInt('۱٬۲۳۴٬۵۶۷'), true));
+    check('Text::toInt: 1,234,567 (ASCII commas)', Text::toInt('1,234,567') === 1234567);
+    check('Text::toInt: ۱۲۳۴ (plain persian digits)', Text::toInt('۱۲۳۴') === 1234);
+    check('Text::toInt: 1 234 (spaces)', Text::toInt('1 234') === 1234);
+    check('Text::toInt: plain int', Text::toInt('1250000') === 1250000);
+    check('Text::toInt: garbage -> null', Text::toInt('12abc') === null);
+    check('Text::toInt: negative -> null', Text::toInt('-5') === null);
+    check('Text::toInt: decimal -> null', Text::toInt('12.5') === null);
+    check('Text::toInt: empty -> null', Text::toInt('') === null);
+
+    // Controller accepts digit/separated STRINGS and stores exact integers.
+    // product_update (not create): the tight plan is already at its limit.
+    Request::setTestInput([
+        'id' => $p1['id'],
+        'sell_price' => '1,234,567',
+        'buy_price' => '۱٬۲۳۴٬۵۶۷',
+        'stock' => '۱۲',
+        'low_stock_threshold' => '۲',
+    ]);
+    $upNum = $controller->product_update();
+    check('update: comma/persian inputs stored as exact integers',
+        (int) $upNum['product']['sell_price'] === 1234567
+        && (int) $upNum['product']['buy_price'] === 1234567
+        && (int) $upNum['product']['stock'] === 12
+        && (int) $upNum['product']['low_stock_threshold'] === 2,
+        var_export([$upNum['product']['sell_price'], $upNum['product']['stock']], true));
+
+    // A real number works too; anything non-integer/garbage is refused with
+    // a clear Persian message (INVALID_INPUT), never stored as 0.
+    Request::setTestInput(['id' => $p1['id'], 'sell_price' => 990000]);
+    check('update: real int accepted', (int) $controller->product_update()['product']['sell_price'] === 990000);
+
+    $badInputs = [
+        ['sell_price' => '12abc', 'msg' => 'garbage price refused'],
+        ['sell_price' => '12.5', 'msg' => 'decimal price refused'],
+        ['sell_price' => '-3', 'msg' => 'negative price refused'],
+        ['stock' => '12abc', 'msg' => 'garbage stock refused'],
+        ['stock' => '-1', 'msg' => 'negative stock refused'],
+        ['low_stock_threshold' => '۱٫۵', 'msg' => 'decimal threshold refused'],
+    ];
+    foreach ($badInputs as $bad) {
+        Request::setTestInput(['id' => $p1['id']] + $bad);
+        expectApi(fn () => $controller->product_update(), 'INVALID_INPUT', $bad['msg']);
+    }
+
+    // Bulk "fixed" value as a Persian digit string with thousands separators.
+    // $expiringId has sell_price 100000; +۱٬۰۰۰ with rounding_step 1000 is exact.
+    $db->execute('UPDATE products SET sell_price = 100000 WHERE id = ?', [$expiringId]);
+    Request::setTestInput(['mode' => 'fixed', 'value' => '۱٬۰۰۰', 'ids' => [$expiringId]]);
+    $updatedBulk = $controller->products_bulk_price();
+    check('bulk: persian-comma fixed value applied',
+        (int) $updatedBulk['updated'] === 1
+        && (int) $db->value('SELECT sell_price FROM products WHERE id = ?', [$expiringId]) === 101000,
+        var_export($db->value('SELECT sell_price FROM products WHERE id = ?', [$expiringId]), true));
+
+    // --- is_low_stock: ONE rule (product threshold if > 0, else shop default).
+    // Shop default = 2 for this section (was the schema default 3 before).
+    $db->execute('UPDATE shop_settings SET low_stock_threshold = 2 WHERE tenant_id = ?', [$tenantId]);
+    $lowDefault = $model->insert(['name' => 'کم‌موجودی پیش‌فرض', 'sell_price' => 1000, 'stock' => 2]);
+    $lowHealthy = $model->insert(['name' => 'موجودی سالم', 'sell_price' => 1000, 'stock' => 3]);
+    $lowOverride = $model->insert([
+        'name' => 'کم‌موجودی آستانه', 'sell_price' => 1000, 'stock' => 3, 'low_stock_threshold' => 5,
+    ]);
+    check('is_low_stock: threshold 0 uses shop default (stock 2 <= 2)',
+        $model->findWithImages($lowDefault)['is_low_stock'] === true);
+    check('is_low_stock: threshold 0 uses shop default (stock 3 > 2)',
+        $model->findWithImages($lowHealthy)['is_low_stock'] === false);
+    check('is_low_stock: product threshold 5 overrides shop default',
+        $model->findWithImages($lowOverride)['is_low_stock'] === true);
+
+    // The low_stock FILTER must agree with the flag on EVERY product.
+    $all = $model->list(['archived' => 'all', 'per_page' => '50']);
+    $flagged = array_map(static fn (array $r): int => (int) $r['id'],
+        array_filter($all['items'], static fn (array $r): bool => $r['is_low_stock'] === true));
+    $filtered = $model->list(['low_stock' => true, 'archived' => 'all', 'per_page' => '50']);
+    $filterIds = array_map(static fn (array $r): int => (int) $r['id'], $filtered['items']);
+    sort($flagged);
+    sort($filterIds);
+    check('low_stock filter matches is_low_stock flags exactly', $flagged === $filterIds,
+        'flags=' . implode(',', $flagged) . ' filter=' . implode(',', $filterIds));
+
+    // Restore the schema default so nothing else depends on our override.
+    $db->execute('UPDATE shop_settings SET low_stock_threshold = 3 WHERE tenant_id = ?', [$tenantId]);
 
     // ----------------------------------------------------------------------
     // Cleanup (the same steps also run as a finally/shutdown safety net).
