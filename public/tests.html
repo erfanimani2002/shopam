@@ -181,7 +181,7 @@ payloads.forEach(function (item) {
   catch (e) { renderError = item.title + ': ' + (e && e.message); htmls.push(''); }
 });
 check('card render: no exception on 4 payloads', renderError === null, renderError);
-check('card render: money shown as persian group', htmls[0].indexOf('۱,۲۳۴,۵۶۷') !== -1, htmls[0].slice(0, 120));
+check('card render: money shown as persian group', htmls[0].indexOf('۱,۲۵۰,۰۰۰') !== -1, htmls[0].slice(0, 120));
 check('card render: cover img rendered', htmls[0].indexOf('uploads/1/7/x.webp') !== -1);
 check('card render: placeholder when no cover', htmls[1].indexOf('cover placeholder') !== -1);
 check('card render: owner sees cost', htmls[0].indexOf('خرید:') !== -1 && htmls[0].indexOf('۳۵۰,۰۰۰') !== -1, htmls[0].slice(0, 200));
@@ -193,7 +193,7 @@ try { staffHtml = Products.card(payloads[0].p); }
 catch (e) { renderError = 'staff: ' + (e && e.message); }
 check('card render: staff view no exception', renderError === null, renderError);
 check('card render: staff sees no cost', staffHtml.indexOf('خرید:') === -1, staffHtml.slice(0, 160));
-check('card render: staff sees price', staffHtml.indexOf('۱,۲۳۴,۵۶۷') !== -1);
+check('card render: staff sees price', staffHtml.indexOf('۱,۲۵۰,۰۰۰') !== -1);
 APP.canSeeCost = true;
 
 /* A payload with hostile/odd values (null prices, string numbers, missing keys). */
